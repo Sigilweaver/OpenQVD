@@ -188,8 +188,52 @@ not just a library.
 
 - Stream `to_write_table` to remove the memory amplification for very
   large files (>128 MiB). None exist in the public corpus today.
-- Enumerate `NumberFormat/Type` values across the corpus and document
-  their semantic meaning in SPEC.
-- Enumerate `Tags` usage.
-- Replace the silent `None` on out-of-range bit-field index with a
-  checked API; no corpus file exercises this path today.
+
+## Stage 7 — Python bindings
+
+### PyO3 + maturin
+
+`crates/openqvd-py` is a mixed-layout maturin crate that exposes the Rust
+library to Python via PyO3 0.28 and pyo3-arrow 0.17.  The native extension
+ships as a single `.so` file; the pure-Python wrapper in
+`python/openqvd/` provides `read()`, `schema()`, and `write()` plus
+Polars integration (`read_qvd`, `scan_qvd`, `df.qvd.write`,
+`lf.qvd.collect_and_write`).
+
+### Arrow type mapping
+
+`to_record_batch` infers Arrow data types from the QVD
+`NumberFormat/Type` hint first, then falls back to symbol value types.
+DATE → Date32 (shifted by 25 569 days to the Unix epoch), TIMESTAMP →
+Timestamp(µs), TIME → Duration(µs) (fractional days × 86 400 000 000).
+Int/DualInt → Int64, Float/DualFloat → Float64, String → LargeUtf8,
+empty symbol table → Null.
+
+### Predicate pushdown
+
+Filters are resolved against symbol tables *before* row iteration.
+For each filter, `resolve_filter()` computes a set of symbol indices
+that satisfy the predicate (or, for NOT_IN, the set of indices that
+fail).  During row unpacking, rows whose symbol indices do not match
+any resolved filter are skipped entirely — no value decoding or Arrow
+append occurs for those rows.
+
+Supported operators: `eq`, `is_in`, `not_in`, `is_null`, `is_not_null`.
+All comparisons are string-based (against `value_as_str` of each symbol).
+
+### Corpus validation
+
+Full corpus run (1 089 files, 42 LFS stubs skipped):
+- **1 044 OK** — matches the Rust reader baseline exactly.
+- **3 FAIL** — same damaged fixtures that fail the Rust reader.
+
+### Test suite
+
+34 pytest tests cover:
+- Core API: read, schema, projection, metadata, row counts (9 tests)
+- Predicate pushdown: eq, is_in, not_in, combined, no-match, error
+  handling (7 tests)
+- Write round-trip: basic, with table name, value preservation, NULLs
+  (5 tests)
+- Polars: read, scan, projection, filters, write, lazy write (9 tests)
+- Pandas: to_pandas, values, projection, NULLs (4 tests)

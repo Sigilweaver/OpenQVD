@@ -64,6 +64,13 @@ import openqvd
 table = openqvd.read("data.qvd")
 table = openqvd.read("data.qvd", columns=["OrderId", "Amount"])
 
+# Predicate pushdown (filtering at the Rust level, before Arrow conversion)
+table = openqvd.read("data.qvd", filters=[
+    {"column": "Region", "op": "eq", "value": "West"},
+    {"column": "Status", "op": "is_in", "value": ["Open", "Pending"]},
+    {"column": "Notes",  "op": "is_not_null"},
+])
+
 # Inspect metadata only (no row decoding)
 info = openqvd.schema("data.qvd")
 print(info.table_name, info.num_rows)
@@ -79,15 +86,16 @@ import polars as pl
 
 df = pl.read_qvd("data.qvd")
 lf = pl.scan_qvd("data.qvd", columns=["A", "B"])
+df = pl.read_qvd("data.qvd", filters=[{"column": "A", "op": "eq", "value": "x"}])
 df.qvd.write("out.qvd")
 
 # Pandas (via PyArrow)
 df = openqvd.read("data.qvd").to_pandas()
 ```
 
-The Python bindings read **1,043 of 1,089** corpus files (95.8%). The
-46 failures are all `no QvdTableHeader terminator` — the same files
-that fail the Rust reader.
+The Python bindings read **1,044 of 1,047** valid corpus files (99.7%),
+matching the Rust reader baseline. The 3 failures are deliberately-
+corrupted test fixtures.
 
 **Arrow type mapping**
 
