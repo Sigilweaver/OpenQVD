@@ -100,9 +100,8 @@ fn try_one(p: &Path) -> Result<Outcome, String> {
     }
 
     let a = Qvd::from_bytes(bytes).map_err(|e| format!("read A: {e}"))?;
-    let wt = a.to_write_table();
-    let rewritten = wt.to_bytes().map_err(|e| format!("write: {e}"))?;
-    drop(wt);
+    // Use the streaming Qvd->bytes path (no intermediate WriteTable).
+    let rewritten = a.to_bytes().map_err(|e| format!("write: {e}"))?;
     let b = Qvd::from_bytes(rewritten).map_err(|e| format!("read B: {e}"))?;
 
     if a.num_rows() != b.num_rows() {
