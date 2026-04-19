@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::error::QvdError;
+use crate::header::NumberFormat;
 use crate::value::{Cell, Value};
 
 /// A single column of logical values, ready to be written.
@@ -16,10 +17,11 @@ pub struct Column {
     pub name: String,
     /// One entry per row. `None` becomes NULL (bias=-2).
     pub cells: Vec<Cell>,
-    /// Optional `NumberFormat/Type` hint. Defaults to `"UNKNOWN"`.
-    pub number_format_type: Option<String>,
-    /// Optional `Tags` content. Defaults to empty.
-    pub tags: Option<String>,
+    /// `<NumberFormat>` sub-element. Informational only; defaults to
+    /// `Type=UNKNOWN` with all other sub-elements empty.
+    pub number_format: NumberFormat,
+    /// `<Tags><String>...</String></Tags>` children. May be empty.
+    pub tags: Vec<String>,
 }
 
 impl Column {
@@ -28,8 +30,13 @@ impl Column {
         Self {
             name: name.into(),
             cells,
-            number_format_type: None,
-            tags: None,
+            number_format: NumberFormat {
+                r#type: "UNKNOWN".to_string(),
+                n_dec: "0".to_string(),
+                use_thou: "0".to_string(),
+                ..NumberFormat::default()
+            },
+            tags: Vec::new(),
         }
     }
 }
@@ -361,8 +368,7 @@ fn build_xml_header(
     ));
     s.push_str("  <Fields>\r\n");
     for (col, plan) in table.columns.iter().zip(plans) {
-        let nft = col.number_format_type.as_deref().unwrap_or("UNKNOWN");
-        let tags = col.tags.as_deref().unwrap_or("");
+        let nf = &col.number_format;
         s.push_str("    <QvdFieldHeader>\r\n");
         s.push_str(&format!(
             "      <FieldName>{}</FieldName>\r\n",
@@ -377,10 +383,26 @@ fn build_xml_header(
             plan.bit_width
         ));
         s.push_str(&format!("      <Bias>{}</Bias>\r\n", plan.bias));
+        s.push_str("      <NumberFormat>\r\n");
         s.push_str(&format!(
-            "      <NumberFormat><Type>{}</Type></NumberFormat>\r\n",
-            xml_escape(nft)
+            "        <Type>{}</Type>\r\n",
+            xml_escape(if nf.r#type.is_empty() { "UNKNOWN" } else { &nf.r#type })
         ));
+        s.push_str(&format!(
+            "        <nDec>{}</nDec>\r\n",
+            xml_escape(if nf.n_dec.is_empty() { "0" } else { &nf.n_dec })
+        ));
+        s.push_str(&format!(
+            "        <UseThou>{}</UseThou>\r\n",
+            xml_escape(if nf.use_thou.is_empty() { "0" } else { &nf.use_thou })
+        ));
+        s.push_str(&format!("        <Fmt>{}</Fmt>\r\n", xml_escape(&nf.fmt)));
+        s.push_str(&format!("        <Dec>{}</Dec>\r\n", xml_escape(&nf.dec)));
+        s.push_str(&format!(
+            "        <Thou>{}</Thou>\r\n",
+            xml_escape(&nf.thou)
+        ));
+        s.push_str("      </NumberFormat>\r\n");
         s.push_str(&format!(
             "      <NoOfSymbols>{}</NoOfSymbols>\r\n",
             plan.symbols.len()
@@ -393,7 +415,18 @@ fn build_xml_header(
             "      <Length>{}</Length>\r\n",
             plan.length_in_body
         ));
-        s.push_str(&format!("      <Tags>{}</Tags>\r\n", xml_escape(tags)));
+        if col.tags.is_empty() {
+            s.push_str("      <Tags/>\r\n");
+        } else {
+            s.push_str("      <Tags>\r\n");
+            for t in &col.tags {
+                s.push_str(&format!(
+                    "        <String>{}</String>\r\n",
+                    xml_escape(t)
+                ));
+            }
+            s.push_str("      </Tags>\r\n");
+        }
         s.push_str("    </QvdFieldHeader>\r\n");
     }
     s.push_str("  </Fields>\r\n");

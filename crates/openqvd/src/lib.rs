@@ -32,7 +32,7 @@ mod value;
 mod writer;
 
 pub use error::QvdError;
-pub use header::{FieldHeader, TableHeader};
+pub use header::{FieldHeader, NumberFormat, TableHeader};
 pub use reader::Qvd;
 pub use value::{Dual, Value};
 pub use writer::{Column, WriteTable};

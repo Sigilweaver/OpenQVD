@@ -84,8 +84,12 @@ fn cmd_stat(args: &[String]) -> Result<(), String> {
             w = f.bit_width,
             bias = f.bias,
             ns = f.no_of_symbols,
-            ty = f.number_format_type,
-            tg = f.tags,
+            ty = f.number_format.r#type,
+            tg = if f.tags.is_empty() {
+                String::new()
+            } else {
+                f.tags.join(" ")
+            },
         )
         .unwrap();
     }

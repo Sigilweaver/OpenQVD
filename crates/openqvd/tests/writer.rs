@@ -162,3 +162,47 @@ fn writer_is_deterministic() {
     let b = t.to_bytes().unwrap();
     assert_eq!(a, b);
 }
+
+#[test]
+fn number_format_and_tags_round_trip() {
+    use openqvd::NumberFormat;
+
+    let mut col = Column::new("price", vec![Some(Value::Float(1.25)), Some(Value::Float(2.5))]);
+    col.number_format = NumberFormat {
+        r#type: "MONEY".to_string(),
+        n_dec: "2".to_string(),
+        use_thou: "1".to_string(),
+        fmt: "$#,##0.00;($#,##0.00)".to_string(),
+        dec: ".".to_string(),
+        thou: ",".to_string(),
+    };
+    col.tags = vec!["$numeric".to_string(), "$key".to_string()];
+
+    let t = WriteTable::new("t", vec![col]).unwrap();
+    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+
+    let f = &q.fields()[0];
+    assert_eq!(f.number_format.r#type, "MONEY");
+    assert_eq!(f.number_format.n_dec, "2");
+    assert_eq!(f.number_format.use_thou, "1");
+    assert_eq!(f.number_format.fmt, "$#,##0.00;($#,##0.00)");
+    assert_eq!(f.number_format.dec, ".");
+    assert_eq!(f.number_format.thou, ",");
+    assert_eq!(f.tags, vec!["$numeric".to_string(), "$key".to_string()]);
+}
+
+#[test]
+fn multiple_tags_all_preserved() {
+    let mut col = Column::new("x", vec![Some(Value::Int(1))]);
+    col.tags = vec![
+        "$numeric".into(),
+        "$integer".into(),
+        "$key".into(),
+        "$hidden".into(),
+    ];
+    let t = WriteTable::new("t", vec![col]).unwrap();
+    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+    assert_eq!(q.fields()[0].tags.len(), 4);
+    assert_eq!(q.fields()[0].tags[0], "$numeric");
+    assert_eq!(q.fields()[0].tags[3], "$hidden");
+}

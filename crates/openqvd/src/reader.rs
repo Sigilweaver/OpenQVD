@@ -144,8 +144,8 @@ impl Qvd {
             .map(|f| crate::Column {
                 name: f.name.clone(),
                 cells: Vec::with_capacity(n_rows),
-                number_format_type: Some(f.number_format_type.clone()),
-                tags: Some(f.tags.clone()),
+                number_format: f.number_format.clone(),
+                tags: f.tags.clone(),
             })
             .collect();
         for row in self.rows() {

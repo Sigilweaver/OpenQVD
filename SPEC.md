@@ -241,17 +241,95 @@ as dedicated symbols when used.
   insignificant for reading but preserved in observed files for Qlik
   round-trip.
 
-## 6. What this spec does not yet cover
+## 6. NumberFormat and Tags
+
+`NumberFormat` and `Tags` are presentation hints only. They do **not**
+change how bytes are decoded. A reader may expose them so downstream
+tools can format or classify values; a writer should preserve anything
+it does not understand and emit sensible defaults when generating a
+file from scratch.
+
+### 6.1 NumberFormat
+
+Every observed `QvdFieldHeader` carries exactly this element set, in
+order, even when values are empty:
+
+```xml
+<NumberFormat>
+  <Type>...</Type>
+  <nDec>0</nDec>
+  <UseThou>0</UseThou>
+  <Fmt></Fmt>
+  <Dec></Dec>
+  <Thou></Thou>
+</NumberFormat>
+```
+
+The complete set of `Type` values observed across 9,174 field headers
+in 1,045 distinct QVD files:
+
+| Type        | Count | Meaning                                              |
+|-------------|------:|------------------------------------------------------|
+| `UNKNOWN`   | 6,225 | No interpretation; treat symbols verbatim. Default.  |
+| `INTEGER`   | 1,249 | Whole number. Physical symbol is typically `0x01`.   |
+| `REAL`      |   948 | Floating number. Physical symbol is typically `0x02` or `0x06`. |
+| `DATE`      |   319 | Serial date. Dual float whose integer part is the day count. |
+| `MONEY`     |   180 | Decimal with currency formatting.                    |
+| `ASCII`     |   115 | String guaranteed ASCII-only. Physical symbol `0x04`.|
+| `TIMESTAMP` |    77 | Serial date + fractional day.                        |
+| `FIX`       |    47 | Fixed-point number.                                  |
+| `0`         |    13 | Sentinel; equivalent to `UNKNOWN`. Tolerate on read. |
+| `TIME`      |     1 | Fractional day.                                      |
+
+Notes for a conforming reader:
+
+- None of these values change how a symbol is decoded. A `DATE` field
+  still stores an integer or dual-float symbol exactly as section 2
+  describes.
+- `Fmt` is a display pattern using Qlik tokens (`YYYY`, `MM`, `DD`,
+  `hh`, `mm`, `ss`, `M/D/YYYY h:mm:ss[.fff] TT`, `###0.00`,
+  `$#,##0;($#,##0)`, etc.). It is informational; a reader must not
+  reject unknown patterns.
+- `Dec` and `Thou` are single-character hints for how to render the
+  decimal and thousands separators in that field's `Fmt`. Empty means
+  use the locale default.
+- `nDec` is a nonnegative integer. Observed values are 0, 2, 4, 7, 14,
+  20. It applies to display only.
+- `UseThou` is `0` or `1`.
+
+### 6.2 Tags
+
+`Tags` is an element containing zero or more `<String>` children, each
+a short marker. All 18 distinct tag values observed across the corpus
+are listed below. All begin with `$`.
+
+| Tag                 | Approximate meaning                                   |
+|---------------------|-------------------------------------------------------|
+| `$numeric`          | Column's stored symbols are all numeric.              |
+| `$text`             | Column's stored symbols are strings.                  |
+| `$integer`          | Stronger than `$numeric`; integer-valued.             |
+| `$ascii`            | Strings are ASCII-only.                               |
+| `$key`              | Field is used as a key in some load script.           |
+| `$keypart`          | Part of a composite key.                              |
+| `$date`             | Serial date.                                          |
+| `$timestamp`        | Serial date + time.                                   |
+| `$geoname`          | Geographic name.                                      |
+| `$geopoint`         | WGS84 point.                                          |
+| `$geopolygon`       | WGS84 polygon.                                        |
+| `$geomultipolygon`  | WGS84 multi-polygon.                                  |
+| `$wgs84`            | Coordinate system marker.                             |
+| `$hidden`           | Excluded from UI field lists.                         |
+| `$relates_<FIELD>`  | Foreign-key relation to another field.                |
+
+A reader must treat any tag string not in this table as an unknown
+informational marker and preserve it on round-trip.
+
+## Deferred topics
 
 - Exact provenance of `CreateUtcTime` and related timestamp fields.
-- Full enumeration of `NumberFormat/Type` values and how readers should
-  map them to user-facing types.
-- Behaviour of `Tags` (`$key`, `$ascii`, etc.) beyond informational use.
-- Any compressed variant (no sample present in corpus).
+- Any compressed variant (no sample present in the corpus).
 - Multi-table QVDs (none observed; QVD appears to be single-table by
   design).
-
-Future stages will expand these sections once enough signal is available.
 
 ## 7. Writing a QVD file
 

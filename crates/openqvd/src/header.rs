@@ -1,5 +1,24 @@
 use crate::error::QvdError;
 
+/// Parsed `<NumberFormat>` element. Every observed file contains the
+/// same six sub-elements. Values are informational only: they do not
+/// change how bytes are decoded.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NumberFormat {
+    /// `Type` (e.g. `UNKNOWN`, `INTEGER`, `REAL`, `DATE`, `TIMESTAMP`).
+    pub r#type: String,
+    /// `nDec` (number of decimal places, as a string).
+    pub n_dec: String,
+    /// `UseThou` (`"0"` or `"1"`).
+    pub use_thou: String,
+    /// `Fmt` (display pattern).
+    pub fmt: String,
+    /// `Dec` (decimal separator, single character or empty).
+    pub dec: String,
+    /// `Thou` (thousands separator, single character or empty).
+    pub thou: String,
+}
+
 /// Parsed representation of a `<QvdFieldHeader>` element.
 #[derive(Debug, Clone)]
 pub struct FieldHeader {
@@ -17,10 +36,19 @@ pub struct FieldHeader {
     pub offset: u32,
     /// `Length`: byte length of the symbol table.
     pub length: u32,
-    /// `NumberFormat/Type`: informational format hint (e.g. `INTEGER`).
-    pub number_format_type: String,
-    /// `Tags`: whitespace-delimited Qlik-specific hints.
-    pub tags: String,
+    /// `NumberFormat` sub-element (informational).
+    pub number_format: NumberFormat,
+    /// `Tags/String` children. Usually Qlik markers such as
+    /// `$numeric`, `$text`, `$key`.
+    pub tags: Vec<String>,
+}
+
+impl FieldHeader {
+    /// Shortcut for `self.number_format.r#type` (the only NumberFormat
+    /// field most callers care about).
+    pub fn number_format_type(&self) -> &str {
+        &self.number_format.r#type
+    }
 }
 
 /// Parsed representation of `<QvdTableHeader>` plus its fields.
@@ -92,6 +120,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
     let mut fields: Vec<FieldHeader> = Vec::new();
     let mut current: Option<FieldHeader> = None;
     let mut in_number_format = false;
+    let mut in_tags = false;
 
     loop {
         match r.read_event().map_err(|e| QvdError::Xml(e.to_string()))? {
@@ -106,11 +135,13 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                         no_of_symbols: 0,
                         offset: 0,
                         length: 0,
-                        number_format_type: String::new(),
-                        tags: String::new(),
+                        number_format: NumberFormat::default(),
+                        tags: Vec::new(),
                     });
                 } else if name == "NumberFormat" {
                     in_number_format = true;
+                } else if name == "Tags" {
+                    in_tags = true;
                 }
                 stack.push(name);
                 text_buf.clear();
@@ -144,20 +175,37 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                                 "NoOfSymbols" => f.no_of_symbols = parse_u32(&txt)?,
                                 "Offset" => f.offset = parse_u32(&txt)?,
                                 "Length" => f.length = parse_u32(&txt)?,
-                                "Tags" => f.tags = txt,
                                 _ => {}
                             }
                         }
                     }
-                    ("NumberFormat", "Type") => {
+                    ("NumberFormat", sub) => {
                         if let Some(f) = current.as_mut() {
-                            f.number_format_type = txt;
+                            match sub {
+                                "Type" => f.number_format.r#type = txt,
+                                "nDec" => f.number_format.n_dec = txt,
+                                "UseThou" => f.number_format.use_thou = txt,
+                                "Fmt" => f.number_format.fmt = txt,
+                                "Dec" => f.number_format.dec = txt,
+                                "Thou" => f.number_format.thou = txt,
+                                _ => {}
+                            }
+                        }
+                    }
+                    ("Tags", "String") => {
+                        if let Some(f) = current.as_mut() {
+                            if !txt.is_empty() {
+                                f.tags.push(txt);
+                            }
                         }
                     }
                     _ => {}
                 }
                 if name == "NumberFormat" {
                     in_number_format = false;
+                }
+                if name == "Tags" {
+                    in_tags = false;
                 }
                 if name == "QvdFieldHeader" {
                     if let Some(f) = current.take() {
@@ -184,6 +232,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
         }
     }
     let _ = in_number_format;
+    let _ = in_tags;
 
     if table_name.is_empty() && fields.is_empty() {
         return Err(QvdError::bad_header("no TableName and no fields found"));
