@@ -110,7 +110,7 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
 
     let mut result = Vec::with_capacity(filters.len());
     for item in filters.iter() {
-        let dict = item.downcast::<PyDict>().map_err(|_| {
+        let dict = item.cast::<PyDict>().map_err(|_| {
             PyValueError::new_err("each filter must be a dict with 'column', 'op', and optionally 'value'")
         })?;
         let column: String = dict
@@ -139,7 +139,7 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
                     .map(|v| {
                         let v = v?;
                         // Try str() first, fall back to repr
-                        if let Ok(s) = v.downcast::<PyString>() {
+                        if let Ok(s) = v.cast::<PyString>() {
                             Ok(s.to_string())
                         } else {
                             Ok(v.str()?.to_string())
@@ -156,7 +156,7 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
                     .try_iter()?
                     .map(|v| {
                         let v = v?;
-                        if let Ok(s) = v.downcast::<PyString>() {
+                        if let Ok(s) = v.cast::<PyString>() {
                             Ok(s.to_string())
                         } else {
                             Ok(v.str()?.to_string())
