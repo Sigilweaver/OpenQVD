@@ -132,6 +132,16 @@ impl Qvd {
         }
     }
 
+    /// Iterate rows, returning a `Result` for each. An out-of-range symbol
+    /// index that the infallible [`Self::rows`] iterator would swallow as
+    /// `None` is surfaced here as a [`QvdError`].
+    pub fn checked_rows(&self) -> CheckedRowIter<'_> {
+        CheckedRowIter {
+            qvd: self,
+            next: 0,
+        }
+    }
+
     /// Materialise this QVD as a [`crate::WriteTable`], one column per
     /// field, in the same order. Useful for round-trip testing and
     /// programmatic rewriting.
@@ -209,6 +219,60 @@ impl<'a> Iterator for RowIter<'a> {
             }
         }
         Some(out)
+    }
+}
+
+/// Checked iterator over decoded rows.
+pub struct CheckedRowIter<'a> {
+    qvd: &'a Qvd,
+    next: u32,
+}
+
+impl<'a> Iterator for CheckedRowIter<'a> {
+    type Item = Result<Vec<Cell>, QvdError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next >= self.qvd.header.no_of_records {
+            return None;
+        }
+        let idx = self.next as usize;
+        self.next += 1;
+        let rbs = self.qvd.header.record_byte_size as usize;
+        let rows_off = self.qvd.header.row_block_offset as usize;
+        let rec = &self.qvd.body[rows_off + idx * rbs..rows_off + (idx + 1) * rbs];
+        let rec_int = le_bits_to_u128(rec);
+        let mut out: Vec<Cell> = Vec::with_capacity(self.qvd.header.fields.len());
+        for (i, f) in self.qvd.header.fields.iter().enumerate() {
+            let stored = if f.bit_width == 0 {
+                0
+            } else if rbs * 8 <= 128 {
+                let mask = if f.bit_width == 128 {
+                    u128::MAX
+                } else {
+                    (1u128 << f.bit_width) - 1
+                };
+                ((rec_int >> f.bit_offset) & mask) as i128
+            } else {
+                extract_bits_wide(rec, f.bit_offset, f.bit_width) as i128
+            };
+            let index = stored + f.bias as i128;
+            if index < 0 {
+                out.push(None);
+            } else {
+                let ui = index as usize;
+                match self.qvd.symbol_tables[i].get(ui) {
+                    Some(v) => out.push(Some(v.clone())),
+                    None => {
+                        return Some(Err(QvdError::structure(format!(
+                            "row {idx}: field {:?} symbol index {ui} is out of range (n={})",
+                            f.name,
+                            self.qvd.symbol_tables[i].len()
+                        ))));
+                    }
+                }
+            }
+        }
+        Some(Ok(out))
     }
 }
 

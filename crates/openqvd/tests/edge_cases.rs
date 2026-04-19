@@ -338,3 +338,68 @@ fn lf_terminator_accepted() {
     let r: Vec<_> = q.rows().collect();
     assert_eq!(r[0][0], Some(Value::Str("Z".into())));
 }
+
+/// A hand-built record pointing at a symbol index that is out of range.
+#[test]
+fn checked_rows_errors_on_out_of_range_index() {
+    use openqvd::{Qvd, Value};
+
+    // One field, 2 bits, 2 symbols (indices 0 and 1).
+    // We'll craft a row whose stored value is 3 (out of range).
+    let sym_int = |v: i32| -> Vec<u8> {
+        let mut b = Vec::new();
+        b.push(0x01u8); // type INT
+        b.extend_from_slice(&v.to_le_bytes());
+        b
+    };
+    let mut sym_block = Vec::new();
+    sym_block.extend(sym_int(10));
+    sym_block.extend(sym_int(20));
+    let sym_len = sym_block.len() as u32;
+
+    // 1 row, RecordByteSize=1, BitWidth=2, Bias=0, stored=3 (0b11).
+    let row_block: Vec<u8> = vec![0b0000_0011u8];
+    let row_len = row_block.len() as u32;
+    let body_offset = sym_len; // rows start right after symbols
+
+    let header_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n\
+<QvdTableHeader>\r\n\
+  <TableName>test</TableName>\r\n\
+  <Fields>\r\n\
+    <QvdFieldHeader>\r\n\
+      <FieldName>x</FieldName>\r\n\
+      <BitOffset>0</BitOffset>\r\n\
+      <BitWidth>2</BitWidth>\r\n\
+      <Bias>0</Bias>\r\n\
+      <NumberFormat><Type>UNKNOWN</Type></NumberFormat>\r\n\
+      <NoOfSymbols>2</NoOfSymbols>\r\n\
+      <Offset>0</Offset>\r\n\
+      <Length>{sym_len}</Length>\r\n\
+      <Tags></Tags>\r\n\
+    </QvdFieldHeader>\r\n\
+  </Fields>\r\n\
+  <Compression></Compression>\r\n\
+  <RecordByteSize>1</RecordByteSize>\r\n\
+  <NoOfRecords>1</NoOfRecords>\r\n\
+  <Offset>{body_offset}</Offset>\r\n\
+  <Length>{row_len}</Length>\r\n\
+</QvdTableHeader>\r\n\x00"
+    );
+
+    let mut bytes = header_xml.into_bytes();
+    bytes.extend(&sym_block);
+    bytes.extend(&row_block);
+
+    let q = Qvd::from_bytes(bytes).unwrap();
+
+    // Infallible rows() returns None.
+    let rows: Vec<_> = q.rows().collect();
+    assert_eq!(rows[0][0], None);
+
+    // checked_rows() returns Err.
+    let results: Vec<_> = q.checked_rows().collect();
+    assert!(results[0].is_err(), "expected Err for out-of-range index");
+    let msg = results[0].as_ref().unwrap_err().to_string();
+    assert!(msg.contains("out of range"), "message was: {msg}");
+}
