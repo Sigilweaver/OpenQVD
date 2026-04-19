@@ -70,6 +70,7 @@ def read(
     path: Union[str, Path],
     *,
     columns: Optional[List[str]] = None,
+    filters: Optional[List[dict]] = None,
 ) -> "pa.Table":
     """Read a QVD file as a PyArrow Table.
 
@@ -82,6 +83,17 @@ def read(
         equivalent to projection pushdown - the symbol table for skipped
         columns is still parsed but no Arrow array is built for it. Pass
         ``None`` (default) to load all columns.
+    filters:
+        Optional list of predicate-pushdown filter dicts. Each dict has:
+
+        - ``"column"``: column name (str)
+        - ``"op"``: one of ``"eq"``, ``"is_in"``, ``"not_in"``,
+          ``"is_null"``, ``"is_not_null"``
+        - ``"value"``: str for ``"eq"``, list[str] for ``"is_in"``/
+          ``"not_in"``, omitted for null checks.
+
+        Filters are resolved against the column's symbol table *before*
+        row iteration, so non-matching rows are skipped efficiently.
 
     Returns
     -------
@@ -100,10 +112,11 @@ def read(
     >>> import openqvd
     >>> table = openqvd.read("data.qvd")
     >>> table = openqvd.read("data.qvd", columns=["col1", "col2"])
+    >>> table = openqvd.read("data.qvd", filters=[{"column": "Status", "op": "eq", "value": "Active"}])
     """
     import pyarrow as pa
 
-    batch = _read(str(path), columns)
+    batch = _read(str(path), columns, filters)
     return pa.table(batch)
 
 

@@ -37,6 +37,7 @@ def read_qvd(
     path: Union[str, Path],
     *,
     columns: Optional[List[str]] = None,
+    filters: Optional[List[dict]] = None,
 ) -> pl.DataFrame:
     """Read a QVD file as a Polars DataFrame.
 
@@ -46,12 +47,15 @@ def read_qvd(
         Path to the ``.qvd`` file.
     columns:
         Optional list of column names to select (projection pushdown).
+    filters:
+        Optional list of predicate-pushdown filter dicts. See
+        ``openqvd.read`` for the format.
 
     Returns
     -------
     polars.DataFrame
     """
-    table = openqvd.read(path, columns=columns)
+    table = openqvd.read(path, columns=columns, filters=filters)
     return pl.from_arrow(table)
 
 
@@ -59,6 +63,7 @@ def scan_qvd(
     path: Union[str, Path],
     *,
     columns: Optional[List[str]] = None,
+    filters: Optional[List[dict]] = None,
 ) -> pl.LazyFrame:
     """Lazily scan a QVD file, returning a Polars LazyFrame.
 
@@ -73,6 +78,9 @@ def scan_qvd(
     columns:
         Optional list of column names.  Columns not listed will not be
         decoded, saving memory for wide tables.
+    filters:
+        Optional list of predicate-pushdown filter dicts. See
+        ``openqvd.read`` for the format.
 
     Returns
     -------
@@ -81,7 +89,7 @@ def scan_qvd(
     # Polars does not have a native QVD scan source yet, so we wrap the
     # eager read inside a lazy sink.  For files that fit in RAM this is
     # equivalent in practice; a native scan plugin can be added later.
-    return read_qvd(path, columns=columns).lazy()
+    return read_qvd(path, columns=columns, filters=filters).lazy()
 
 
 # ---------------------------------------------------------------------------

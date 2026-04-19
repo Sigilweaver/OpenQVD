@@ -95,6 +95,90 @@ impl PyFieldInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Filter helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a Python filter dict list into Rust `Filter` objects.
+///
+/// Expected format per filter dict:
+///   {"column": "col_name", "op": "eq"|"is_in"|"not_in"|"is_null"|"is_not_null", "value": ...}
+///
+/// `value` is a `str` for "eq", a `list[str]` for "is_in"/"not_in",
+/// and unused/absent for "is_null"/"is_not_null".
+fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<openqvd::Filter>> {
+    use pyo3::types::{PyDict, PyString};
+
+    let mut result = Vec::with_capacity(filters.len());
+    for item in filters.iter() {
+        let dict = item.downcast::<PyDict>().map_err(|_| {
+            PyValueError::new_err("each filter must be a dict with 'column', 'op', and optionally 'value'")
+        })?;
+        let column: String = dict
+            .get_item("column")?
+            .ok_or_else(|| PyValueError::new_err("filter dict missing 'column' key"))?
+            .extract()?;
+        let op: String = dict
+            .get_item("op")?
+            .ok_or_else(|| PyValueError::new_err("filter dict missing 'op' key"))?
+            .extract()?;
+        let predicate = match op.as_str() {
+            "eq" | "==" => {
+                let val: String = dict
+                    .get_item("value")?
+                    .ok_or_else(|| PyValueError::new_err("filter 'eq' requires a 'value' key"))?
+                    .str()?
+                    .to_string();
+                openqvd::ColumnFilter::Eq(val)
+            }
+            "is_in" | "in" => {
+                let vals_obj = dict
+                    .get_item("value")?
+                    .ok_or_else(|| PyValueError::new_err("filter 'is_in' requires a 'value' key"))?;
+                let vals: Vec<String> = vals_obj
+                    .try_iter()?
+                    .map(|v| {
+                        let v = v?;
+                        // Try str() first, fall back to repr
+                        if let Ok(s) = v.downcast::<PyString>() {
+                            Ok(s.to_string())
+                        } else {
+                            Ok(v.str()?.to_string())
+                        }
+                    })
+                    .collect::<PyResult<_>>()?;
+                openqvd::ColumnFilter::IsIn(vals)
+            }
+            "not_in" => {
+                let vals_obj = dict
+                    .get_item("value")?
+                    .ok_or_else(|| PyValueError::new_err("filter 'not_in' requires a 'value' key"))?;
+                let vals: Vec<String> = vals_obj
+                    .try_iter()?
+                    .map(|v| {
+                        let v = v?;
+                        if let Ok(s) = v.downcast::<PyString>() {
+                            Ok(s.to_string())
+                        } else {
+                            Ok(v.str()?.to_string())
+                        }
+                    })
+                    .collect::<PyResult<_>>()?;
+                openqvd::ColumnFilter::NotIn(vals)
+            }
+            "is_null" => openqvd::ColumnFilter::IsNull,
+            "is_not_null" => openqvd::ColumnFilter::IsNotNull,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown filter op {other:?}; use 'eq', 'is_in', 'not_in', 'is_null', or 'is_not_null'"
+                )));
+            }
+        };
+        result.push(openqvd::Filter { column, predicate });
+    }
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
 // Core read function
 // ---------------------------------------------------------------------------
 
@@ -106,21 +190,36 @@ impl PyFieldInfo {
 ///     Path to the .qvd file.
 /// columns : list[str] | None
 ///     Column names to include. ``None`` (default) returns all columns.
+/// filters : list[dict] | None
+///     Predicate pushdown filters. Each dict has keys ``column`` (str),
+///     ``op`` (one of ``"eq"``, ``"is_in"``, ``"not_in"``, ``"is_null"``,
+///     ``"is_not_null"``), and ``value`` (str for eq, list[str] for
+///     is_in/not_in, absent for null checks). Filters are resolved against
+///     the column symbol table before row iteration, so non-matching rows
+///     are skipped without full decoding.
 ///
 /// Returns
 /// -------
 /// pyarrow.RecordBatch
 ///     The decoded table data.
 #[pyfunction]
-#[pyo3(signature = (path, columns=None))]
-fn read(path: &str, columns: Option<Vec<String>>) -> PyResult<PyRecordBatch> {
+#[pyo3(signature = (path, columns=None, filters=None))]
+fn read(py: Python<'_>, path: &str, columns: Option<Vec<String>>, filters: Option<Bound<'_, pyo3::types::PyList>>) -> PyResult<PyRecordBatch> {
     let qvd = openqvd::Qvd::from_path(path).map_err(to_py)?;
     let col_refs: Option<Vec<&str>> = columns
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let batch = qvd
-        .to_record_batch(col_refs.as_deref())
-        .map_err(to_py)?;
+    let batch = match filters {
+        Some(ref f) if !f.is_empty() => {
+            let rust_filters = parse_py_filters(py, f)?;
+            qvd.to_record_batch_filtered(col_refs.as_deref(), &rust_filters)
+                .map_err(to_py)?
+        }
+        _ => {
+            qvd.to_record_batch(col_refs.as_deref())
+                .map_err(to_py)?
+        }
+    };
     Ok(PyRecordBatch::new(batch))
 }
 

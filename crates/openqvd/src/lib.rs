@@ -41,4 +41,4 @@ pub use value::{Dual, Value};
 pub use writer::{Column, WriteTable};
 
 #[cfg(feature = "arrow")]
-pub use self::arrow::record_batch_to_write_table;
+pub use self::arrow::{record_batch_to_write_table, ColumnFilter, Filter};

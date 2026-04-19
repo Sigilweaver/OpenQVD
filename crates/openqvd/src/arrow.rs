@@ -11,6 +11,7 @@
 //! Arrow/Unix epoch (1 Jan 1970) when the column type is `DATE` or
 //! `TIMESTAMP`.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::{
@@ -30,6 +31,107 @@ use crate::header::FieldHeader;
 /// Qlik date serial epoch: days from 30 Dec 1899 to 1 Jan 1970.
 const QLIK_EPOCH_OFFSET: i32 = 25_569;
 
+// ---------------------------------------------------------------------------
+// Predicate pushdown: column-level filters resolved against symbol tables
+// ---------------------------------------------------------------------------
+
+/// A filter predicate for a single column, used for predicate pushdown.
+///
+/// Filters are resolved against the column's symbol table *before* row
+/// iteration, so only rows where every filtered column's packed index
+/// matches a satisfying symbol are emitted. This avoids decoding
+/// non-matching rows entirely.
+pub enum ColumnFilter {
+    /// Keep rows where the column value equals this string exactly.
+    Eq(String),
+    /// Keep rows where the column value is one of these strings.
+    IsIn(Vec<String>),
+    /// Keep rows where the column value is NOT one of these strings.
+    NotIn(Vec<String>),
+    /// Keep rows where the column is NULL.
+    IsNull,
+    /// Keep rows where the column is NOT NULL.
+    IsNotNull,
+}
+
+/// A named filter: column name + predicate.
+pub struct Filter {
+    /// Column name.
+    pub column: String,
+    /// The predicate to apply.
+    pub predicate: ColumnFilter,
+}
+
+/// Resolve a `ColumnFilter` against a symbol table, returning the set of
+/// symbol indices whose values satisfy the predicate, plus whether NULL
+/// rows should pass.
+fn resolve_filter(symbols: &[Value], pred: &ColumnFilter) -> (HashSet<usize>, bool) {
+    match pred {
+        ColumnFilter::IsNull => (HashSet::new(), true),
+        ColumnFilter::IsNotNull => {
+            let all: HashSet<usize> = (0..symbols.len()).collect();
+            (all, false)
+        }
+        ColumnFilter::Eq(target) => {
+            let mut set = HashSet::new();
+            for (i, sym) in symbols.iter().enumerate() {
+                if symbol_matches_str(sym, target) {
+                    set.insert(i);
+                }
+            }
+            (set, false)
+        }
+        ColumnFilter::IsIn(targets) => {
+            let target_set: HashSet<&str> = targets.iter().map(|s| s.as_str()).collect();
+            let mut set = HashSet::new();
+            for (i, sym) in symbols.iter().enumerate() {
+                if target_set.iter().any(|t| symbol_matches_str(sym, t)) {
+                    set.insert(i);
+                }
+            }
+            (set, false)
+        }
+        ColumnFilter::NotIn(targets) => {
+            let target_set: HashSet<&str> = targets.iter().map(|s| s.as_str()).collect();
+            let mut set = HashSet::new();
+            for (i, sym) in symbols.iter().enumerate() {
+                if !target_set.iter().any(|t| symbol_matches_str(sym, t)) {
+                    set.insert(i);
+                }
+            }
+            (set, true) // NULL is not "in" any set, so it passes NotIn
+        }
+    }
+}
+
+/// Check if a symbol's string representation matches `target`.
+fn symbol_matches_str(sym: &Value, target: &str) -> bool {
+    match sym {
+        Value::Str(s) => s == target,
+        Value::Int(i) => {
+            // Compare as string representation
+            let s = i.to_string();
+            s == target
+        }
+        Value::Float(f) => {
+            let s = f.to_string();
+            s == target
+        }
+        Value::DualInt(d) => d.text == target || d.number.to_string() == target,
+        Value::DualFloat(d) => d.text == target || d.number.to_string() == target,
+    }
+}
+
+/// Internal: resolved filter ready for row-level evaluation.
+struct ResolvedFilter {
+    /// Index into `qvd.fields()`.
+    field_idx: usize,
+    /// Symbol indices that satisfy the predicate.
+    passing_indices: HashSet<usize>,
+    /// Whether NULL rows pass.
+    null_passes: bool,
+}
+
 /// Convert a `Qvd` to an Arrow `RecordBatch`.
 ///
 /// `columns` optionally restricts which columns are included. A `QvdError`
@@ -39,6 +141,7 @@ const QLIK_EPOCH_OFFSET: i32 = 25_569;
 pub fn to_record_batch(
     qvd: &Qvd,
     columns: Option<&[&str]>,
+    filters: Option<&[Filter]>,
 ) -> Result<RecordBatch, QvdError> {
     // Resolve column indices.
     let col_indices: Vec<usize> = match columns {
@@ -52,6 +155,26 @@ pub fn to_record_batch(
                     .ok_or_else(|| QvdError::structure(format!("column {n:?} not found")))
             })
             .collect::<Result<_, _>>()?,
+    };
+
+    // Resolve filters against symbol tables.
+    let resolved_filters: Vec<ResolvedFilter> = match filters {
+        None => Vec::new(),
+        Some(fs) => {
+            let mut resolved = Vec::with_capacity(fs.len());
+            for f in fs {
+                let field_idx = qvd.fields()
+                    .iter()
+                    .position(|fh| fh.name == f.column)
+                    .ok_or_else(|| QvdError::structure(
+                        format!("filter column {:?} not found", f.column)
+                    ))?;
+                let symbols = qvd.symbols(field_idx).unwrap_or(&[]);
+                let (passing_indices, null_passes) = resolve_filter(symbols, &f.predicate);
+                resolved.push(ResolvedFilter { field_idx, passing_indices, null_passes });
+            }
+            resolved
+        }
     };
 
     // Build Arrow schema.
@@ -77,16 +200,49 @@ pub fn to_record_batch(
         })
         .collect();
 
-    // Allocate builders.
+    // Allocate builders (estimate capacity; may be smaller with filters).
     let mut builders: Vec<BuilderEnum> = dtypes
         .iter()
         .map(|dt| BuilderEnum::new(dt, n))
         .collect();
 
-    // Iterate rows once.
-    for row in qvd.rows() {
-        for (out, &in_idx) in col_indices.iter().enumerate() {
-            builders[out].append(&row[in_idx], &dtypes[out]);
+    // Iterate rows once, applying predicate pushdown.
+    if resolved_filters.is_empty() {
+        for row in qvd.rows() {
+            for (out, &in_idx) in col_indices.iter().enumerate() {
+                builders[out].append(&row[in_idx], &dtypes[out]);
+            }
+        }
+    } else {
+        'row: for row in qvd.rows() {
+            // Check all filter predicates.
+            for rf in &resolved_filters {
+                let cell = &row[rf.field_idx];
+                match cell {
+                    None => {
+                        if !rf.null_passes {
+                            continue 'row;
+                        }
+                    }
+                    Some(v) => {
+                        // We need to determine the symbol index for this cell.
+                        // Since the row iterator resolves symbols, we match
+                        // the value against the passing set by checking if
+                        // any passing symbol index has this value.
+                        let symbols = qvd.symbols(rf.field_idx).unwrap_or(&[]);
+                        let matches = rf.passing_indices.iter().any(|&idx| {
+                            idx < symbols.len() && symbols[idx] == *v
+                        });
+                        if !matches {
+                            continue 'row;
+                        }
+                    }
+                }
+            }
+            // Row passes all filters.
+            for (out, &in_idx) in col_indices.iter().enumerate() {
+                builders[out].append(&row[in_idx], &dtypes[out]);
+            }
         }
     }
 
@@ -288,7 +444,22 @@ impl Qvd {
         &self,
         columns: Option<&[&str]>,
     ) -> Result<RecordBatch, QvdError> {
-        to_record_batch(self, columns)
+        to_record_batch(self, columns, None)
+    }
+
+    /// Convert this table to an Arrow [`RecordBatch`] with predicate pushdown.
+    ///
+    /// `filters` restricts which rows are included by resolving predicates
+    /// against the column symbol tables before iterating rows. Only rows
+    /// where every filter predicate is satisfied are emitted. Filter columns
+    /// do not need to appear in `columns` -- they are resolved against the
+    /// full field list.
+    pub fn to_record_batch_filtered(
+        &self,
+        columns: Option<&[&str]>,
+        filters: &[Filter],
+    ) -> Result<RecordBatch, QvdError> {
+        to_record_batch(self, columns, Some(filters))
     }
 }
 
