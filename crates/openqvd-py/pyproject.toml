@@ -33,3 +33,6 @@ Repository = "https://github.com/openqvd/openqvd"
 python-source = "python"
 module-name = "openqvd._openqvd"
 features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

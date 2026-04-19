@@ -17,8 +17,8 @@ use std::sync::Arc;
 use arrow_array::{
     ArrayRef, NullArray,
     builder::{
-        Date32Builder, Float64Builder, Int64Builder, LargeStringBuilder,
-        TimestampMicrosecondBuilder,
+        Date32Builder, DurationMicrosecondBuilder, Float64Builder,
+        Int64Builder, LargeStringBuilder, TimestampMicrosecondBuilder,
     },
     RecordBatch,
 };
@@ -341,6 +341,7 @@ enum BuilderEnum {
     LargeStr(LargeStringBuilder),
     Date32(Date32Builder),
     TimestampMicro(TimestampMicrosecondBuilder),
+    DurationMicro(DurationMicrosecondBuilder),
     /// Column with an empty symbol table — all rows are null.
     Null(usize),
     /// Fallback for unrecognised types — emit as LargeUtf8.
@@ -358,6 +359,9 @@ impl BuilderEnum {
             DataType::Date32 => Self::Date32(Date32Builder::with_capacity(capacity)),
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 Self::TimestampMicro(TimestampMicrosecondBuilder::with_capacity(capacity))
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Self::DurationMicro(DurationMicrosecondBuilder::with_capacity(capacity))
             }
             DataType::Null => Self::Null(capacity),
             _ => {
@@ -380,6 +384,7 @@ impl BuilderEnum {
             Self::LargeStr(b) => b.append_null(),
             Self::Date32(b) => b.append_null(),
             Self::TimestampMicro(b) => b.append_null(),
+            Self::DurationMicro(b) => b.append_null(),
             Self::Null(_) => {}
             Self::Fallback(b) => b.append_null(),
         }
@@ -401,6 +406,12 @@ impl BuilderEnum {
                 let micros = (unix_days * 86_400_000_000.0) as i64;
                 b.append_value(micros);
             }
+            Self::DurationMicro(b) => {
+                // Qlik time-of-day: fractional days (0.0 = midnight, 0.5 = noon).
+                let frac_day = value_as_f64(v);
+                let micros = (frac_day * 86_400_000_000.0) as i64;
+                b.append_value(micros);
+            }
             Self::Null(_) => {} // value shouldn't appear for empty symbol table
             Self::Fallback(b) => b.append_value(value_as_str(v)),
         }
@@ -414,6 +425,7 @@ impl BuilderEnum {
             Self::LargeStr(mut b) => Arc::new(b.finish()),
             Self::Date32(mut b) => Arc::new(b.finish()),
             Self::TimestampMicro(mut b) => Arc::new(b.finish()),
+            Self::DurationMicro(mut b) => Arc::new(b.finish()),
             Self::Null(n) => Arc::new(NullArray::new(n)),
             Self::Fallback(mut b) => Arc::new(b.finish()),
         }
