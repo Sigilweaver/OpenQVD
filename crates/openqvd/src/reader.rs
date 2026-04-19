@@ -131,6 +131,33 @@ impl Qvd {
             next: 0,
         }
     }
+
+    /// Materialise this QVD as a [`crate::WriteTable`], one column per
+    /// field, in the same order. Useful for round-trip testing and
+    /// programmatic rewriting.
+    pub fn to_write_table(&self) -> crate::WriteTable {
+        let n_rows = self.num_rows() as usize;
+        let mut columns: Vec<crate::Column> = self
+            .header
+            .fields
+            .iter()
+            .map(|f| crate::Column {
+                name: f.name.clone(),
+                cells: Vec::with_capacity(n_rows),
+                number_format_type: Some(f.number_format_type.clone()),
+                tags: Some(f.tags.clone()),
+            })
+            .collect();
+        for row in self.rows() {
+            for (i, cell) in row.into_iter().enumerate() {
+                columns[i].cells.push(cell);
+            }
+        }
+        crate::WriteTable {
+            name: self.header.table_name.clone(),
+            columns,
+        }
+    }
 }
 
 /// Iterator over decoded rows.
