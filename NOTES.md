@@ -136,3 +136,60 @@ Known limitations in this first pass:
   path; still correct, but could be faster.
 - `Tags` and `NumberFormat` are preserved but not interpreted.
 - No writer yet.
+
+## Stage 6: Writer and round-trip
+
+The writer (`crates/openqvd/src/writer.rs`) implements SPEC section 7.
+Per-column plan:
+
+1. Symbols are deduplicated by value and ordered by first occurrence.
+   Float keys use `to_bits()` so `-0.0` and `+0.0` are distinct and
+   NaN-distinct bit patterns survive round-trip.
+2. Bias is `-2` when any NULL is present, else `0`. The smallest
+   `BitWidth` that fits `(n_symbols - 1) + (-bias)` is chosen. A column
+   with one symbol and no NULLs collapses to `BitWidth=0`.
+3. Bit offsets are assigned in declaration order; symbol-block offsets
+   likewise; the record byte size is `ceil(total_bits / 8)`.
+
+Row packing uses a u128 fast path when the record fits, and a per-field
+byte-level bit writer otherwise. The XML header emits only the minimal
+element set from SPEC 7.3 and is byte-deterministic for a given input.
+
+### Corpus round-trip
+
+The `round_trip` example walks a directory, for each QVD runs
+`read -> write -> read`, and compares cells one at a time. A size cap
+keeps memory bounded (the current `to_write_table` materialises all
+cells, which amplifies memory for multi-million-row files; future
+improvement would stream directly from reader symbol tables).
+
+Result over `/workspaces/Sigilweaver/QVD-Sources/downloads` with a
+128 MiB cap:
+
+```
+total=1145 ok=1093 skipped=49 oversize=0 fail=3
+```
+
+- 1093 valid files round-trip with cell-for-cell equivalence.
+- 3 failures are the same damaged fixtures that already fail the reader.
+- 49 skipped are non-QVD bytes (LFS pointers, misnamed CSV/QVS).
+
+Round-trip parity also holds on smaller caps (8 MiB: 1053/1053), so the
+writer is not sensitive to corpus subsets.
+
+### CLI
+
+A small `openqvd` binary wraps the library with five subcommands:
+`stat`, `head`, `csv`, `json`, `rewrite`. This is the first
+user-facing surface and makes the project useful as a standalone tool,
+not just a library.
+
+### Remaining follow-ups
+
+- Stream `to_write_table` to remove the memory amplification for very
+  large files (>128 MiB). None exist in the public corpus today.
+- Enumerate `NumberFormat/Type` values across the corpus and document
+  their semantic meaning in SPEC.
+- Enumerate `Tags` usage.
+- Replace the silent `None` on out-of-range bit-field index with a
+  checked API; no corpus file exercises this path today.
