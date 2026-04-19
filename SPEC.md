@@ -253,6 +253,99 @@ as dedicated symbols when used.
 
 Future stages will expand these sections once enough signal is available.
 
+## 7. Writing a QVD file
+
+A writer's job is to produce a byte stream that a conforming reader
+parses back to the same logical table. OpenQVD's writer targets
+**semantic round-trip**: every value read from a source file, when
+re-written and re-read, compares equal by the reader's typed API. Exact
+byte-level round-trip is not a goal and is not achievable in general
+(Qlik's choice of bit widths, symbol ordering, and XML whitespace is not
+uniquely determined by the data).
+
+### 7.1 Responsibilities
+
+Given a table (columns, per-column cells where each cell is one of the
+five [`Value`] variants or NULL), a writer must:
+
+1. Choose a symbol ordering per column and assign contiguous indices
+   `0..NoOfSymbols`. Distinct values must receive distinct indices. NULL
+   is not stored as a symbol.
+2. Decide whether the column allows NULL. If it does, emit `Bias = -2`
+   and reserve the two lowest bit patterns (stored values 0 and 1) for
+   NULL (any `index + Bias < 0` decodes as NULL). Otherwise emit
+   `Bias = 0`.
+3. Compute `BitWidth` as the smallest non-negative integer such that
+   `NoOfSymbols + (-Bias) <= 2^BitWidth`, with a special case of
+   `BitWidth = 0` when the column has exactly one possible stored value
+   (one symbol and no NULLs).
+4. Assign `BitOffset` in column order, starting at 0, packing fields
+   contiguously with no gaps. Compute `RecordByteSize =
+   ceil(sum(BitWidth) / 8)`.
+5. Emit each column's symbol table as the concatenation of encoded
+   entries (see 7.2) and record its `Offset` and `Length` in the body.
+6. Emit the row block: for each row, pack
+   `(index_i - Bias_i) << BitOffset_i` for all columns i into an
+   integer of `8 * RecordByteSize` bits, little-endian, and emit that
+   many bytes.
+7. Write the XML header (see 7.3), a single `0x00` terminator, the
+   concatenated symbol tables, and the row block, in that order.
+
+Unused high bits in the last byte of a row MUST be zero.
+
+### 7.2 Choosing the symbol type byte
+
+A writer SHOULD choose the narrowest type byte that preserves the
+logical value:
+
+- `Value::Int(i32)` -> type byte `0x01`.
+- `Value::Float(f64)` -> type byte `0x02`.
+- `Value::Str(s)` -> type byte `0x04`.
+- `Value::DualInt { number, text }` -> type byte `0x05`.
+- `Value::DualFloat { number, text }` -> type byte `0x06`.
+
+Strings MUST be valid UTF-8 and MUST NOT contain an internal `0x00`
+byte (the symbol terminator reserved by the format). A writer that
+receives a string containing `0x00` MUST signal an error, not silently
+truncate.
+
+### 7.3 XML header minimum content
+
+A reader produced from this spec requires only the elements listed in
+section 1.3. A writer MUST emit, at minimum:
+
+- `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` followed by
+  CRLF.
+- `<QvdTableHeader>` root.
+- One `<TableName>`.
+- `<Fields>` containing one `<QvdFieldHeader>` per column, each with:
+  `FieldName`, `BitOffset`, `BitWidth`, `Bias`, `NumberFormat/Type`,
+  `NoOfSymbols`, `Offset`, `Length`, `Tags`.
+- `<Compression></Compression>` (always empty per section 1.5).
+- `<RecordByteSize>`, `<NoOfRecords>`, `<Offset>`, `<Length>`.
+
+All numeric elements are decimal ASCII. Line endings SHOULD be CRLF
+(`\r\n`). The header MUST be followed immediately by a single `0x00`
+byte and then the body.
+
+A writer MAY additionally emit informational elements (`QvBuildNo`,
+`CreatorDoc`, `CreateUtcTime`, etc.); readers ignore unknown or empty
+elements.
+
+### 7.4 Determinism
+
+For a given input table, a compliant writer SHOULD be deterministic:
+given the same rows in the same order, it should produce the same bytes
+on every run. This allows downstream tooling to rely on content
+hashing. OpenQVD's reference writer achieves this by:
+
+- Sorting symbols within a column by first-occurrence order, not by
+  value. First-occurrence ordering has the useful property that the
+  most common values tend to live at low indices, which makes row
+  bytes compress well with downstream tools.
+- Emitting XML attributes and elements in a fixed order.
+- Not embedding timestamps by default.
+
 ## Appendix A. Worked example
 
 File: a minimal two-symbol, two-row QVD.
