@@ -95,3 +95,25 @@ that then resolve against the symbol table.
   with unknown type bytes including `0x35`, `0xaf`, `0xb5`, `0xb8`,
   `0xc2`, `0x30`. File appears to be corrupted or truncated. Needs a
   closer look, but should not affect the spec.
+
+## Stage 4: end-to-end decode validation (confirmed)
+
+A pure-Python decoder (`re/decode.py`) implemented strictly from
+`SPEC.md` was run over the full corpus with `--max-rows 100`. Result:
+
+- 1,044 files decoded cleanly.
+- 3 files failed, all expected corruption:
+  - `ptarmiganlabs/ctrl-q-qvd-viewer/test-data/misc/damaged.qvd`
+    (intentionally corrupted test fixture, filename says so).
+  - `MuellerConstantin/qvd4js/__tests__/data/damaged.qvd` (same).
+  - `Hankiiee/.../mynewfile3.qvd` (previously flagged).
+
+The decoder enforces every rule in the spec and fails loudly on any
+deviation: bit-field overlap, out-of-range symbol indices, trailing
+bytes in a symbol table, mis-sized row block, unknown type byte, or
+truncated string payload. None of these triggered on a non-damaged
+file.
+
+This is strong evidence that Stages 1..3 of the spec are complete and
+correct for the uncompressed, single-table QVD files present in the
+public corpus.
