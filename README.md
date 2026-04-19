@@ -7,7 +7,7 @@ community can use without depending on any proprietary Qlik tooling.
 
 ## Status
 
-All six originally planned stages are complete:
+Seven stages complete:
 
 1. XML header and envelope structure. (Spec section 1.)
 2. Per-field symbol table encoding. (Spec section 2.)
@@ -16,6 +16,7 @@ All six originally planned stages are complete:
    decoder.
 5. Rust reader prototype (`crates/openqvd`) with edge-case tests.
 6. Writer + semantic round-trip tests.
+7. Python bindings (`crates/openqvd-py`) — PyArrow, Polars, Pandas.
 
 See `SPEC.md` for the current specification and `NOTES.md` for the
 working log of observations.
@@ -39,6 +40,66 @@ names, byte-for-byte equal cell values). 9 writer tests cover NULL
 handling, all five symbol types, zero-width collapse for constant
 columns, 500-distinct wide columns, NUL-in-string rejection,
 uneven-column rejection, and deterministic output.
+
+### Python bindings
+
+`crates/openqvd-py` is a [maturin](https://maturin.rs/) mixed-layout
+package that exposes a pure-Python API on top of the Rust library.
+
+**Install (development)**
+
+```sh
+cd crates/openqvd-py
+uv venv .venv && source .venv/bin/activate
+uv pip install maturin pyarrow polars pandas
+maturin develop
+```
+
+**Usage**
+
+```python
+import openqvd
+
+# Read as a PyArrow Table
+table = openqvd.read("data.qvd")
+table = openqvd.read("data.qvd", columns=["OrderId", "Amount"])
+
+# Inspect metadata only (no row decoding)
+info = openqvd.schema("data.qvd")
+print(info.table_name, info.num_rows)
+print([f.name for f in info.fields])
+
+# Write from a PyArrow Table
+openqvd.write(table, "out.qvd")
+openqvd.write(table, "out.qvd", table_name="Orders")
+
+# Polars (import registers pl.read_qvd, pl.scan_qvd, df.qvd.write)
+import openqvd.polars
+import polars as pl
+
+df = pl.read_qvd("data.qvd")
+lf = pl.scan_qvd("data.qvd", columns=["A", "B"])
+df.qvd.write("out.qvd")
+
+# Pandas (via PyArrow)
+df = openqvd.read("data.qvd").to_pandas()
+```
+
+The Python bindings read **1,043 of 1,089** corpus files (95.8%). The
+46 failures are all `no QvdTableHeader terminator` — the same files
+that fail the Rust reader.
+
+**Arrow type mapping**
+
+| QVD NumberFormat/Type | Arrow type |
+|---|---|
+| `DATE` | `Date32` (Qlik epoch → Unix epoch) |
+| `TIMESTAMP` | `Timestamp(Microsecond, None)` |
+| `TIME` | `Duration(Microsecond)` |
+| Int / DualInt symbols | `Int64` |
+| Float / DualFloat symbols | `Float64` |
+| String symbols | `LargeUtf8` |
+| Empty symbol table | `Null` |
 
 ### CLI
 

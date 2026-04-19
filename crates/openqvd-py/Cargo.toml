@@ -1,0 +1,23 @@
+[package]
+name = "openqvd-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Python bindings for the OpenQVD library."
+
+[lib]
+name = "_openqvd"
+crate-type = ["cdylib"]
+
+# Override workspace lint - pyo3 proc-macros generate unsafe code.
+[lints.rust]
+unsafe_code = "allow"
+
+[dependencies]
+openqvd = { path = "../openqvd", features = ["arrow"] }
+pyo3       = { version = "0.28", features = ["extension-module"] }
+pyo3-arrow = { version = "0.17" }
+arrow-array  = { version = "58" }
+arrow-schema = { version = "58" }

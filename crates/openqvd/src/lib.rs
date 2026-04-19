@@ -31,8 +31,14 @@ mod symbols;
 mod value;
 mod writer;
 
+#[cfg(feature = "arrow")]
+mod arrow;
+
 pub use error::QvdError;
 pub use header::{FieldHeader, NumberFormat, TableHeader};
 pub use reader::{CheckedRowIter, Qvd};
 pub use value::{Dual, Value};
 pub use writer::{Column, WriteTable};
+
+#[cfg(feature = "arrow")]
+pub use self::arrow::record_batch_to_write_table;

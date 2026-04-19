@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "openqvd"
+version = "0.1.0"
+description = "Clean-room reader/writer for Qlik QVD files - Python bindings"
+readme = "../../README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+]
+keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
+dependencies = [
+    "pyarrow>=12",
+]
+
+[project.optional-dependencies]
+polars = ["polars>=0.19"]
+pandas = ["pandas>=1.5", "pyarrow>=12"]
+all = ["openqvd[polars,pandas]"]
+
+[project.urls]
+Repository = "https://github.com/openqvd/openqvd"
+
+[tool.maturin]
+python-source = "python"
+module-name = "openqvd._openqvd"
+features = ["pyo3/extension-module"]

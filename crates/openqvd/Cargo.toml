@@ -10,9 +10,21 @@ description = "Clean-room reader for Qlik QVD (.qvd) files."
 [lints]
 workspace = true
 
+[features]
+default = []
+arrow = [
+    "dep:arrow-array",
+    "dep:arrow-schema",
+    "dep:arrow-cast",
+]
+
 [dependencies]
 quick-xml = { version = "0.36", features = ["serialize"] }
 thiserror = "1"
+# Optional Arrow integration
+arrow-array  = { version = "58", optional = true }
+arrow-schema = { version = "58", optional = true }
+arrow-cast   = { version = "58", optional = true }
 
 [[bin]]
 name = "openqvd"
