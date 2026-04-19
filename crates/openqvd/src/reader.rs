@@ -8,6 +8,7 @@ use crate::value::{Cell, Value};
 
 /// An in-memory QVD file with headers, symbol tables, and the packed row
 /// index block.
+#[derive(Debug)]
 pub struct Qvd {
     header: TableHeader,
     header_bytes: usize,
