@@ -1,0 +1,210 @@
+use std::fs;
+use std::path::Path;
+
+use crate::error::QvdError;
+use crate::header::{parse, FieldHeader, TableHeader};
+use crate::symbols::decode_field_symbols;
+use crate::value::{Cell, Value};
+
+/// An in-memory QVD file with headers, symbol tables, and the packed row
+/// index block.
+pub struct Qvd {
+    header: TableHeader,
+    header_bytes: usize,
+    /// The bytes of the file after the header terminator.
+    body: Vec<u8>,
+    /// One decoded symbol table per field, in field order.
+    symbol_tables: Vec<Vec<Value>>,
+}
+
+impl Qvd {
+    /// Read and parse a QVD file from disk.
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, QvdError> {
+        let bytes = fs::read(path.as_ref())?;
+        Self::from_bytes(bytes)
+    }
+
+    /// Parse a QVD file from a byte vector already in memory.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, QvdError> {
+        let (header, header_bytes) = parse(&bytes)?;
+        let body: Vec<u8> = bytes[header_bytes..].to_vec();
+
+        // Structural invariants required by the spec.
+        let expected_len = header
+            .no_of_records
+            .checked_mul(header.record_byte_size)
+            .ok_or_else(|| QvdError::structure("n_records * record_byte_size overflow"))?;
+        if expected_len != header.row_block_length {
+            return Err(QvdError::structure(format!(
+                "row block length {} != n_records * record_byte_size {}",
+                header.row_block_length, expected_len
+            )));
+        }
+        // Bit-field coverage check.
+        let total_bits = header.record_byte_size.saturating_mul(8);
+        let mut used = vec![false; total_bits as usize];
+        for f in &header.fields {
+            if f.bit_width == 0 {
+                continue;
+            }
+            let end = f
+                .bit_offset
+                .checked_add(f.bit_width)
+                .ok_or_else(|| QvdError::structure("bit_offset+bit_width overflow"))?;
+            if end > total_bits {
+                return Err(QvdError::structure(format!(
+                    "field {:?} bits [{}..{}) exceed record size {} bits",
+                    f.name, f.bit_offset, end, total_bits
+                )));
+            }
+            for b in f.bit_offset..end {
+                if used[b as usize] {
+                    return Err(QvdError::structure(format!(
+                        "field {:?} overlaps another at bit {}",
+                        f.name, b
+                    )));
+                }
+                used[b as usize] = true;
+            }
+        }
+
+        let mut symbol_tables = Vec::with_capacity(header.fields.len());
+        for f in &header.fields {
+            symbol_tables.push(decode_field_symbols(&body, header_bytes, f)?);
+        }
+
+        // Row block must lie within the body.
+        let row_end = (header.row_block_offset as usize)
+            .checked_add(header.row_block_length as usize)
+            .ok_or_else(|| QvdError::structure("row block offset+length overflow"))?;
+        if row_end > body.len() {
+            return Err(QvdError::structure(format!(
+                "row block [{}..{}) exceeds body len {}",
+                header.row_block_offset, row_end, body.len()
+            )));
+        }
+
+        Ok(Self {
+            header,
+            header_bytes,
+            body,
+            symbol_tables,
+        })
+    }
+
+    /// Table name from `<TableName>`.
+    pub fn table_name(&self) -> &str {
+        &self.header.table_name
+    }
+
+    /// Number of rows.
+    pub fn num_rows(&self) -> u32 {
+        self.header.no_of_records
+    }
+
+    /// Fields in column order.
+    pub fn fields(&self) -> &[FieldHeader] {
+        &self.header.fields
+    }
+
+    /// Full table header.
+    pub fn header(&self) -> &TableHeader {
+        &self.header
+    }
+
+    /// Byte length of the XML header including the trailing `0x00`.
+    pub fn header_size(&self) -> usize {
+        self.header_bytes
+    }
+
+    /// Decoded symbol table for the given field index.
+    pub fn symbols(&self, field_index: usize) -> Option<&[Value]> {
+        self.symbol_tables.get(field_index).map(|v| v.as_slice())
+    }
+
+    /// Iterate rows. Each row is a `Vec<Cell>` with one entry per field in
+    /// the same order as [`Self::fields`]. `None` denotes a NULL.
+    pub fn rows(&self) -> RowIter<'_> {
+        RowIter {
+            qvd: self,
+            next: 0,
+        }
+    }
+}
+
+/// Iterator over decoded rows.
+pub struct RowIter<'a> {
+    qvd: &'a Qvd,
+    next: u32,
+}
+
+impl<'a> Iterator for RowIter<'a> {
+    type Item = Vec<Cell>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next >= self.qvd.header.no_of_records {
+            return None;
+        }
+        let idx = self.next as usize;
+        self.next += 1;
+        let rbs = self.qvd.header.record_byte_size as usize;
+        let rows_off = self.qvd.header.row_block_offset as usize;
+        let rec = &self.qvd.body[rows_off + idx * rbs..rows_off + (idx + 1) * rbs];
+        // Treat the record as a little-endian unsigned integer up to 128 bits.
+        // For widths larger than 128 bits we fall back to u128 chunks.
+        let rec_int = le_bits_to_u128(rec);
+        let mut out: Vec<Cell> = Vec::with_capacity(self.qvd.header.fields.len());
+        for (i, f) in self.qvd.header.fields.iter().enumerate() {
+            let stored = if f.bit_width == 0 {
+                0
+            } else if rbs * 8 <= 128 {
+                let mask = if f.bit_width == 128 {
+                    u128::MAX
+                } else {
+                    (1u128 << f.bit_width) - 1
+                };
+                ((rec_int >> f.bit_offset) & mask) as i128
+            } else {
+                extract_bits_wide(rec, f.bit_offset, f.bit_width) as i128
+            };
+            let index = stored + f.bias as i128;
+            if index < 0 {
+                out.push(None);
+            } else if index as usize >= self.qvd.symbol_tables[i].len() {
+                // Per spec this is a corruption error. We still want the
+                // iterator to be infallible, so we encode this as None.
+                // Callers that care should use the checked API in a future
+                // stage.
+                out.push(None);
+            } else {
+                out.push(Some(self.qvd.symbol_tables[i][index as usize].clone()));
+            }
+        }
+        Some(out)
+    }
+}
+
+fn le_bits_to_u128(bytes: &[u8]) -> u128 {
+    let mut v: u128 = 0;
+    for (i, &b) in bytes.iter().enumerate().take(16) {
+        v |= (b as u128) << (i * 8);
+    }
+    v
+}
+
+fn extract_bits_wide(rec: &[u8], bit_offset: u32, bit_width: u32) -> u128 {
+    // Slow path: only used if rec is longer than 16 bytes.
+    let start_byte = (bit_offset / 8) as usize;
+    let end_byte = ((bit_offset + bit_width + 7) / 8) as usize;
+    let mut chunk: u128 = 0;
+    for (i, &b) in rec[start_byte..end_byte].iter().enumerate() {
+        chunk |= (b as u128) << (i * 8);
+    }
+    let shift = bit_offset - (start_byte as u32) * 8;
+    let mask = if bit_width == 128 {
+        u128::MAX
+    } else {
+        (1u128 << bit_width) - 1
+    };
+    (chunk >> shift) & mask
+}

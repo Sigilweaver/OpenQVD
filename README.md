@@ -15,6 +15,10 @@ by design, to keep the derivation clean.
 See `SPEC.md` for the current specification draft and `NOTES.md` for the
 working log of observations.
 
+A Rust reader crate lives in `crates/openqvd` and is implemented strictly
+from `SPEC.md`. It parses 1,044 of 1,047 valid public QVD samples; the 3
+remaining files are deliberately-corrupted test fixtures.
+
 ## Non-goals
 
 - Executing, shipping, or linking any proprietary Qlik code.

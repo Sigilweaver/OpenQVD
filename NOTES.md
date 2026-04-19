@@ -117,3 +117,22 @@ file.
 This is strong evidence that Stages 1..3 of the spec are complete and
 correct for the uncompressed, single-table QVD files present in the
 public corpus.
+
+## Stage 5: Rust reader prototype (first pass)
+
+A Rust crate in `crates/openqvd/` implements the spec independently of
+the Python decoder. It exposes `Qvd::from_path` / `Qvd::from_bytes`, a
+typed `Value` enum covering the five symbol kinds (int, float, string,
+dual-int, dual-float), and a row iterator that yields `Vec<Option<Value>>`
+with explicit NULL handling for bias-based nulls.
+
+Validation: the `validate_all` example parses 1,044 of 1,047 files in
+the corpus; the 3 failures are the same damaged files that failed the
+Python decoder. Unit test `minimal.rs` round-trips a hand-authored
+header+symbols+rows payload built from the spec alone.
+
+Known limitations in this first pass:
+- Rows block larger than 16 bytes per record uses a slower fallback
+  path; still correct, but could be faster.
+- `Tags` and `NumberFormat` are preserved but not interpreted.
+- No writer yet.
