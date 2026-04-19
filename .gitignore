@@ -1,0 +1,39 @@
+# Reverse engineering workspace (local only, never committed)
+/re/
+/scratch/
+/tmp/
+/samples/
+/corpus/
+*.qvd
+*.qvw
+*.qvf
+*.qvs
+*.hex
+*.bin
+
+# Rust
+/target/
+Cargo.lock.bak
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.uv-cache/
+
+# Pixi
+.pixi/
+
+# C/C++ build
+/build/
+*.o
+*.a
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
