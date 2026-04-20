@@ -105,13 +105,18 @@ impl PyFieldInfo {
 ///
 /// `value` is a `str` for "eq", a `list[str]` for "is_in"/"not_in",
 /// and unused/absent for "is_null"/"is_not_null".
-fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<openqvd::Filter>> {
+fn parse_py_filters(
+    _py: Python<'_>,
+    filters: &Bound<'_, pyo3::types::PyList>,
+) -> PyResult<Vec<openqvd::Filter>> {
     use pyo3::types::{PyDict, PyString};
 
     let mut result = Vec::with_capacity(filters.len());
     for item in filters.iter() {
         let dict = item.cast::<PyDict>().map_err(|_| {
-            PyValueError::new_err("each filter must be a dict with 'column', 'op', and optionally 'value'")
+            PyValueError::new_err(
+                "each filter must be a dict with 'column', 'op', and optionally 'value'",
+            )
         })?;
         let column: String = dict
             .get_item("column")?
@@ -131,9 +136,9 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
                 openqvd::ColumnFilter::Eq(val)
             }
             "is_in" | "in" => {
-                let vals_obj = dict
-                    .get_item("value")?
-                    .ok_or_else(|| PyValueError::new_err("filter 'is_in' requires a 'value' key"))?;
+                let vals_obj = dict.get_item("value")?.ok_or_else(|| {
+                    PyValueError::new_err("filter 'is_in' requires a 'value' key")
+                })?;
                 let vals: Vec<String> = vals_obj
                     .try_iter()?
                     .map(|v| {
@@ -149,9 +154,9 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
                 openqvd::ColumnFilter::IsIn(vals)
             }
             "not_in" => {
-                let vals_obj = dict
-                    .get_item("value")?
-                    .ok_or_else(|| PyValueError::new_err("filter 'not_in' requires a 'value' key"))?;
+                let vals_obj = dict.get_item("value")?.ok_or_else(|| {
+                    PyValueError::new_err("filter 'not_in' requires a 'value' key")
+                })?;
                 let vals: Vec<String> = vals_obj
                     .try_iter()?
                     .map(|v| {
@@ -204,7 +209,12 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
 ///     The decoded table data.
 #[pyfunction]
 #[pyo3(signature = (path, columns=None, filters=None))]
-fn read(py: Python<'_>, path: &str, columns: Option<Vec<String>>, filters: Option<Bound<'_, pyo3::types::PyList>>) -> PyResult<PyRecordBatch> {
+fn read(
+    py: Python<'_>,
+    path: &str,
+    columns: Option<Vec<String>>,
+    filters: Option<Bound<'_, pyo3::types::PyList>>,
+) -> PyResult<PyRecordBatch> {
     // Compute the set of columns whose symbol tables we actually need.
     let rust_filters = match filters {
         Some(ref f) if !f.is_empty() => Some(parse_py_filters(py, f)?),
@@ -216,10 +226,14 @@ fn read(py: Python<'_>, path: &str, columns: Option<Vec<String>>, filters: Optio
         _ => {
             let mut set = std::collections::HashSet::new();
             if let Some(cols) = &columns {
-                for c in cols { set.insert(c.clone()); }
+                for c in cols {
+                    set.insert(c.clone());
+                }
             }
             if let Some(fs) = &rust_filters {
-                for f in fs { set.insert(f.column.clone()); }
+                for f in fs {
+                    set.insert(f.column.clone());
+                }
             }
             // If only filters are set (no projection), we still need all
             // columns for the output, so don't restrict symbol decoding.
@@ -243,14 +257,10 @@ fn read(py: Python<'_>, path: &str, columns: Option<Vec<String>>, filters: Optio
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
     let batch = match rust_filters {
-        Some(ref fs) if !fs.is_empty() => {
-            qvd.to_record_batch_filtered(col_refs.as_deref(), fs)
-                .map_err(to_py)?
-        }
-        _ => {
-            qvd.to_record_batch(col_refs.as_deref())
-                .map_err(to_py)?
-        }
+        Some(ref fs) if !fs.is_empty() => qvd
+            .to_record_batch_filtered(col_refs.as_deref(), fs)
+            .map_err(to_py)?,
+        _ => qvd.to_record_batch(col_refs.as_deref()).map_err(to_py)?,
     };
     Ok(PyRecordBatch::new(batch))
 }

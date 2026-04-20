@@ -17,9 +17,7 @@ classifiers = [
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
 ]
 keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
-dependencies = [
-    "pyarrow>=12",
-]
+dependencies = ["pyarrow>=12"]
 
 [project.optional-dependencies]
 polars = ["polars>=0.19"]

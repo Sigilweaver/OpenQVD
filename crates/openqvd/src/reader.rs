@@ -125,7 +125,9 @@ impl Qvd {
         if row_end > body.len() {
             return Err(QvdError::structure(format!(
                 "row block [{}..{}) exceeds body len {}",
-                header.row_block_offset, row_end, body.len()
+                header.row_block_offset,
+                row_end,
+                body.len()
             )));
         }
 
@@ -170,20 +172,14 @@ impl Qvd {
     /// Iterate rows. Each row is a `Vec<Cell>` with one entry per field in
     /// the same order as [`Self::fields`]. `None` denotes a NULL.
     pub fn rows(&self) -> RowIter<'_> {
-        RowIter {
-            qvd: self,
-            next: 0,
-        }
+        RowIter { qvd: self, next: 0 }
     }
 
     /// Iterate rows, returning a `Result` for each. An out-of-range symbol
     /// index that the infallible [`Self::rows`] iterator would swallow as
     /// `None` is surfaced here as a [`QvdError`].
     pub fn checked_rows(&self) -> CheckedRowIter<'_> {
-        CheckedRowIter {
-            qvd: self,
-            next: 0,
-        }
+        CheckedRowIter { qvd: self, next: 0 }
     }
 
     /// Write the QVD back to a byte vector, re-using the already-parsed body
@@ -244,9 +240,17 @@ impl Qvd {
                 bo = f.bit_offset,
                 bw = f.bit_width,
                 bias = f.bias,
-                ty = xml_escape(if nf.r#type.is_empty() { "UNKNOWN" } else { &nf.r#type }),
+                ty = xml_escape(if nf.r#type.is_empty() {
+                    "UNKNOWN"
+                } else {
+                    &nf.r#type
+                }),
                 ndec = xml_escape(if nf.n_dec.is_empty() { "0" } else { &nf.n_dec }),
-                ut = xml_escape(if nf.use_thou.is_empty() { "0" } else { &nf.use_thou }),
+                ut = xml_escape(if nf.use_thou.is_empty() {
+                    "0"
+                } else {
+                    &nf.use_thou
+                }),
                 fmt = xml_escape(&nf.fmt),
                 dec = xml_escape(&nf.dec),
                 thou = xml_escape(&nf.thou),

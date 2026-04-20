@@ -15,18 +15,17 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_array::{
-    ArrayRef, NullArray,
     builder::{
-        Date32Builder, DurationMicrosecondBuilder, Float64Builder,
-        Int64Builder, LargeStringBuilder, TimestampMicrosecondBuilder,
+        Date32Builder, DurationMicrosecondBuilder, Float64Builder, Int64Builder,
+        LargeStringBuilder, TimestampMicrosecondBuilder,
     },
-    RecordBatch,
+    ArrayRef, NullArray, RecordBatch,
 };
 use arrow_schema::{DataType, Field as ArrowField, Schema, TimeUnit};
 
-use crate::{QvdError, Qvd};
-use crate::value::Value;
 use crate::header::FieldHeader;
+use crate::value::Value;
+use crate::{Qvd, QvdError};
 
 /// Qlik date serial epoch: days from 30 Dec 1899 to 1 Jan 1970.
 const QLIK_EPOCH_OFFSET: i32 = 25_569;
@@ -163,15 +162,20 @@ pub fn to_record_batch(
         Some(fs) => {
             let mut resolved = Vec::with_capacity(fs.len());
             for f in fs {
-                let field_idx = qvd.fields()
+                let field_idx = qvd
+                    .fields()
                     .iter()
                     .position(|fh| fh.name == f.column)
-                    .ok_or_else(|| QvdError::structure(
-                        format!("filter column {:?} not found", f.column)
-                    ))?;
+                    .ok_or_else(|| {
+                        QvdError::structure(format!("filter column {:?} not found", f.column))
+                    })?;
                 let symbols = qvd.symbols(field_idx).unwrap_or(&[]);
                 let (passing_indices, null_passes) = resolve_filter(symbols, &f.predicate);
-                resolved.push(ResolvedFilter { field_idx, passing_indices, null_passes });
+                resolved.push(ResolvedFilter {
+                    field_idx,
+                    passing_indices,
+                    null_passes,
+                });
             }
             resolved
         }
@@ -201,10 +205,7 @@ pub fn to_record_batch(
         .collect();
 
     // Allocate builders (estimate capacity; may be smaller with filters).
-    let mut builders: Vec<BuilderEnum> = dtypes
-        .iter()
-        .map(|dt| BuilderEnum::new(dt, n))
-        .collect();
+    let mut builders: Vec<BuilderEnum> = dtypes.iter().map(|dt| BuilderEnum::new(dt, n)).collect();
 
     // Iterate rows once, applying predicate pushdown.
     if resolved_filters.is_empty() {
@@ -230,9 +231,10 @@ pub fn to_record_batch(
                         // the value against the passing set by checking if
                         // any passing symbol index has this value.
                         let symbols = qvd.symbols(rf.field_idx).unwrap_or(&[]);
-                        let matches = rf.passing_indices.iter().any(|&idx| {
-                            idx < symbols.len() && symbols[idx] == *v
-                        });
+                        let matches = rf
+                            .passing_indices
+                            .iter()
+                            .any(|&idx| idx < symbols.len() && symbols[idx] == *v);
                         if !matches {
                             continue 'row;
                         }
@@ -247,13 +249,9 @@ pub fn to_record_batch(
     }
 
     // Finish arrays.
-    let arrays: Vec<ArrayRef> = builders
-        .into_iter()
-        .map(BuilderEnum::finish)
-        .collect();
+    let arrays: Vec<ArrayRef> = builders.into_iter().map(BuilderEnum::finish).collect();
 
-    RecordBatch::try_new(schema, arrays)
-        .map_err(|e| QvdError::structure(e.to_string()))
+    RecordBatch::try_new(schema, arrays).map_err(|e| QvdError::structure(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -263,9 +261,7 @@ pub fn to_record_batch(
 fn infer_dtype(field: &FieldHeader, symbols: &[Value]) -> DataType {
     match field.number_format.r#type.as_str() {
         "DATE" => return DataType::Date32,
-        "TIMESTAMP" => {
-            return DataType::Timestamp(TimeUnit::Microsecond, None)
-        }
+        "TIMESTAMP" => return DataType::Timestamp(TimeUnit::Microsecond, None),
         "TIME" => return DataType::Duration(TimeUnit::Microsecond),
         _ => {}
     }
@@ -364,9 +360,7 @@ impl BuilderEnum {
                 Self::DurationMicro(DurationMicrosecondBuilder::with_capacity(capacity))
             }
             DataType::Null => Self::Null(capacity),
-            _ => {
-                Self::Fallback(LargeStringBuilder::with_capacity(capacity, capacity * 8))
-            }
+            _ => Self::Fallback(LargeStringBuilder::with_capacity(capacity, capacity * 8)),
         }
     }
 
@@ -452,10 +446,7 @@ impl Qvd {
     /// - Any string symbol -> `LargeUtf8`.
     ///
     /// All columns are nullable.
-    pub fn to_record_batch(
-        &self,
-        columns: Option<&[&str]>,
-    ) -> Result<RecordBatch, QvdError> {
+    pub fn to_record_batch(&self, columns: Option<&[&str]>) -> Result<RecordBatch, QvdError> {
         to_record_batch(self, columns, None)
     }
 
@@ -479,8 +470,8 @@ impl Qvd {
 // Arrow -> WriteTable (for write support from Python)
 // ---------------------------------------------------------------------------
 
-use crate::writer::{Column, WriteTable};
 use crate::value::Dual;
+use crate::writer::{Column, WriteTable};
 
 /// Convert an Arrow `RecordBatch` to a [`WriteTable`].
 ///
@@ -496,7 +487,7 @@ pub fn record_batch_to_write_table(
     batch: &RecordBatch,
     table_name: &str,
 ) -> Result<WriteTable, QvdError> {
-    use arrow_array::{Array, cast::AsArray, types::*};
+    use arrow_array::{cast::AsArray, types::*, Array};
 
     let mut columns: Vec<Column> = Vec::with_capacity(batch.num_columns());
 
@@ -509,19 +500,31 @@ pub fn record_batch_to_write_table(
             DataType::Int8 => {
                 let a = arr.as_primitive::<Int8Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Int(a.value(i) as i32)) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Int(a.value(i) as i32))
+                    });
                 }
             }
             DataType::Int16 => {
                 let a = arr.as_primitive::<Int16Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Int(a.value(i) as i32)) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Int(a.value(i) as i32))
+                    });
                 }
             }
             DataType::Int32 => {
                 let a = arr.as_primitive::<Int32Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Int(a.value(i))) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Int(a.value(i)))
+                    });
                 }
             }
             DataType::Int64 => {
@@ -533,7 +536,10 @@ pub fn record_batch_to_write_table(
                         let v = a.value(i);
                         // Use DualInt if it fits in i32, else encode as string.
                         if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
-                            Some(Value::DualInt(Dual { number: v as i32, text: v.to_string() }))
+                            Some(Value::DualInt(Dual {
+                                number: v as i32,
+                                text: v.to_string(),
+                            }))
                         } else {
                             Some(Value::Str(v.to_string()))
                         }
@@ -543,13 +549,21 @@ pub fn record_batch_to_write_table(
             DataType::UInt8 => {
                 let a = arr.as_primitive::<UInt8Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Int(a.value(i) as i32)) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Int(a.value(i) as i32))
+                    });
                 }
             }
             DataType::UInt16 => {
                 let a = arr.as_primitive::<UInt16Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Int(a.value(i) as i32)) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Int(a.value(i) as i32))
+                    });
                 }
             }
             DataType::UInt32 => {
@@ -559,45 +573,72 @@ pub fn record_batch_to_write_table(
                         None
                     } else {
                         let v = a.value(i);
-                        Some(Value::DualInt(Dual { number: v as i32, text: v.to_string() }))
+                        Some(Value::DualInt(Dual {
+                            number: v as i32,
+                            text: v.to_string(),
+                        }))
                     });
                 }
             }
             DataType::UInt64 => {
                 let a = arr.as_primitive::<UInt64Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Str(a.value(i).to_string())) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Str(a.value(i).to_string()))
+                    });
                 }
             }
             DataType::Float32 => {
                 let a = arr.as_primitive::<Float32Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Float(a.value(i) as f64)) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Float(a.value(i) as f64))
+                    });
                 }
             }
             DataType::Float64 => {
                 let a = arr.as_primitive::<Float64Type>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Float(a.value(i))) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Float(a.value(i)))
+                    });
                 }
             }
             DataType::Utf8 => {
                 let a = arr.as_string::<i32>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Str(a.value(i).to_string())) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Str(a.value(i).to_string()))
+                    });
                 }
             }
             DataType::LargeUtf8 => {
                 let a = arr.as_string::<i64>();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Str(a.value(i).to_string())) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Str(a.value(i).to_string()))
+                    });
                 }
             }
             DataType::Boolean => {
                 use arrow_array::BooleanArray;
                 let a = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Int(a.value(i) as i32)) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Int(a.value(i) as i32))
+                    });
                 }
             }
             DataType::Date32 => {
@@ -610,7 +651,10 @@ pub fn record_batch_to_write_table(
                         let qlik_days = unix_days + QLIK_EPOCH_OFFSET;
                         // Format as ISO date string for the text representation.
                         let text = unix_days_to_iso(unix_days as i64);
-                        cells.push(Some(Value::DualInt(Dual { number: qlik_days, text })));
+                        cells.push(Some(Value::DualInt(Dual {
+                            number: qlik_days,
+                            text,
+                        })));
                     }
                 }
             }
@@ -624,7 +668,10 @@ pub fn record_batch_to_write_table(
                         let unix_days = micros as f64 / 86_400_000_000.0;
                         let qlik_days = unix_days + QLIK_EPOCH_OFFSET as f64;
                         let text = unix_micros_to_iso(micros);
-                        cells.push(Some(Value::DualFloat(Dual { number: qlik_days, text })));
+                        cells.push(Some(Value::DualFloat(Dual {
+                            number: qlik_days,
+                            text,
+                        })));
                     }
                 }
             }
@@ -634,9 +681,16 @@ pub fn record_batch_to_write_table(
                 use arrow_schema::DataType as DT;
                 let str_arr = cast(arr.as_ref(), &DT::LargeUtf8)
                     .map_err(|e| QvdError::structure(e.to_string()))?;
-                let a = str_arr.as_any().downcast_ref::<arrow_array::LargeStringArray>().unwrap();
+                let a = str_arr
+                    .as_any()
+                    .downcast_ref::<arrow_array::LargeStringArray>()
+                    .unwrap();
                 for i in 0..n {
-                    cells.push(if a.is_null(i) { None } else { Some(Value::Str(a.value(i).to_string())) });
+                    cells.push(if a.is_null(i) {
+                        None
+                    } else {
+                        Some(Value::Str(a.value(i).to_string()))
+                    });
                 }
             }
         }
