@@ -32,17 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
+      - uses: astral-sh/setup-uv@v5
+      - name: Build and test
         working-directory: crates/openqvd-py
         run: |
-          python -m pip install --upgrade pip
-          pip install maturin pyarrow polars pandas pytest
-      - name: Build extension
-        working-directory: crates/openqvd-py
-        run: maturin develop --release
-      - name: Run tests
-        working-directory: crates/openqvd-py
-        run: python -m pytest tests/ -v
+          uv venv
+          uv pip install maturin pyarrow polars pandas pytest
+          uv run maturin develop --release
+          uv run pytest tests/ -v
