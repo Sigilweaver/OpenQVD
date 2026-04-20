@@ -1,5 +1,9 @@
 # OpenQVD file format specification (DRAFT)
 
+> **License:** This specification document is licensed under
+> [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+> The accompanying software is AGPL-3.0-or-later.
+
 Status: work in progress, derived by binary analysis of a public corpus of
 ~1,045 QVD files spanning Qlik build numbers 11000..50700+.
 

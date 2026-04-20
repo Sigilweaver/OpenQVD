@@ -154,4 +154,8 @@ openqvd rewrite <in> <out>    # read then re-serialise through the writer
 
 ## License
 
-AGPL-3.0-or-later. See `LICENSE`.
+The **software** (all `.rs`, `.py` source files) is licensed under
+[AGPL-3.0-or-later](LICENSE).
+
+The **specification** (`SPEC.md`) is licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
