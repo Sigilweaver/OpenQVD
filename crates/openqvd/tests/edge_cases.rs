@@ -195,7 +195,9 @@ fn all_five_symbol_types() {
     assert_eq!(got[1][0], Some(Value::Float(1.5)));
     assert_eq!(got[2][0], Some(Value::Str("Z".into())));
     assert!(matches!(&got[3][0], Some(Value::DualInt(d)) if d.number == 42 && d.text == "42"));
-    assert!(matches!(&got[4][0], Some(Value::DualFloat(d)) if d.number == 3.25 && d.text == "3.25"));
+    assert!(
+        matches!(&got[4][0], Some(Value::DualFloat(d)) if d.number == 3.25 && d.text == "3.25")
+    );
 }
 
 /// Unknown symbol type byte must error, not silently misinterpret.

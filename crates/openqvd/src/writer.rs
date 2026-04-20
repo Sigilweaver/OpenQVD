@@ -263,7 +263,7 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
             .ok_or_else(|| QvdError::structure("bit layout overflow"))?;
     }
     let record_bits = bit_cursor;
-    let record_byte_size = (record_bits + 7) / 8;
+    let record_byte_size = record_bits.div_ceil(8);
 
     // 3. Assign symbol-block offsets in declaration order.
     let mut body_cursor: u32 = 0;
@@ -280,7 +280,14 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
         .ok_or_else(|| QvdError::structure("row block size overflow"))?;
 
     // 4. Build the XML header.
-    let xml = build_xml_header(table, &plans, record_byte_size, n_rows, row_block_offset, row_block_length);
+    let xml = build_xml_header(
+        table,
+        &plans,
+        record_byte_size,
+        n_rows,
+        row_block_offset,
+        row_block_length,
+    );
 
     // 5. Emit bytes.
     let mut out = Vec::with_capacity(xml.len() + 1 + (body_cursor + row_block_length) as usize);
@@ -326,8 +333,10 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
         }
     }
 
-    // Discourage unused-field warnings on `symbols` (we may expose it later).
-    let _ = plans.iter().map(|p| &p.symbols).count();
+    // Keep `symbols` alive — we may expose it later.
+    for p in &plans {
+        let _ = &p.symbols;
+    }
 
     Ok(out)
 }
@@ -386,7 +395,11 @@ fn build_xml_header(
         s.push_str("      <NumberFormat>\r\n");
         s.push_str(&format!(
             "        <Type>{}</Type>\r\n",
-            xml_escape(if nf.r#type.is_empty() { "UNKNOWN" } else { &nf.r#type })
+            xml_escape(if nf.r#type.is_empty() {
+                "UNKNOWN"
+            } else {
+                &nf.r#type
+            })
         ));
         s.push_str(&format!(
             "        <nDec>{}</nDec>\r\n",
@@ -394,7 +407,11 @@ fn build_xml_header(
         ));
         s.push_str(&format!(
             "        <UseThou>{}</UseThou>\r\n",
-            xml_escape(if nf.use_thou.is_empty() { "0" } else { &nf.use_thou })
+            xml_escape(if nf.use_thou.is_empty() {
+                "0"
+            } else {
+                &nf.use_thou
+            })
         ));
         s.push_str(&format!("        <Fmt>{}</Fmt>\r\n", xml_escape(&nf.fmt)));
         s.push_str(&format!("        <Dec>{}</Dec>\r\n", xml_escape(&nf.dec)));
@@ -420,10 +437,7 @@ fn build_xml_header(
         } else {
             s.push_str("      <Tags>\r\n");
             for t in &col.tags {
-                s.push_str(&format!(
-                    "        <String>{}</String>\r\n",
-                    xml_escape(t)
-                ));
+                s.push_str(&format!("        <String>{}</String>\r\n", xml_escape(t)));
             }
             s.push_str("      </Tags>\r\n");
         }
@@ -435,10 +449,7 @@ fn build_xml_header(
         "  <RecordByteSize>{}</RecordByteSize>\r\n",
         record_byte_size
     ));
-    s.push_str(&format!(
-        "  <NoOfRecords>{}</NoOfRecords>\r\n",
-        n_rows
-    ));
+    s.push_str(&format!("  <NoOfRecords>{}</NoOfRecords>\r\n", n_rows));
     s.push_str(&format!("  <Offset>{}</Offset>\r\n", row_block_offset));
     s.push_str(&format!("  <Length>{}</Length>\r\n", row_block_length));
     s.push_str("</QvdTableHeader>\r\n");

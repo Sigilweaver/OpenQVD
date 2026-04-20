@@ -35,10 +35,7 @@ fn round_trip_no_nulls() {
 
 #[test]
 fn round_trip_with_nulls() {
-    let cols = vec![Column::new(
-        "v",
-        vec![s("X"), None, s("Y"), s("X"), None],
-    )];
+    let cols = vec![Column::new("v", vec![s("X"), None, s("Y"), s("X"), None])];
     let t = WriteTable::new("t", cols).unwrap();
     let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
     let rows: Vec<_> = q.rows().collect();
@@ -54,20 +51,35 @@ fn round_trip_with_nulls() {
 fn round_trip_all_types() {
     let cols = vec![
         Column::new("i", vec![Some(Value::Int(-42)), Some(Value::Int(7))]),
-        Column::new("f", vec![Some(Value::Float(1.25)), Some(Value::Float(-0.5))]),
+        Column::new(
+            "f",
+            vec![Some(Value::Float(1.25)), Some(Value::Float(-0.5))],
+        ),
         Column::new("s", vec![s("hi"), s("bye")]),
         Column::new(
             "di",
             vec![
-                Some(Value::DualInt(Dual { number: 10, text: "ten".into() })),
-                Some(Value::DualInt(Dual { number: 20, text: "twenty".into() })),
+                Some(Value::DualInt(Dual {
+                    number: 10,
+                    text: "ten".into(),
+                })),
+                Some(Value::DualInt(Dual {
+                    number: 20,
+                    text: "twenty".into(),
+                })),
             ],
         ),
         Column::new(
             "df",
             vec![
-                Some(Value::DualFloat(Dual { number: 3.14, text: "pi".into() })),
-                Some(Value::DualFloat(Dual { number: 2.72, text: "e".into() })),
+                Some(Value::DualFloat(Dual {
+                    number: 3.14,
+                    text: "pi".into(),
+                })),
+                Some(Value::DualFloat(Dual {
+                    number: 2.72,
+                    text: "e".into(),
+                })),
             ],
         ),
     ];
@@ -153,7 +165,12 @@ fn writer_is_deterministic() {
     let cols = vec![
         Column::new(
             "i",
-            vec![Some(Value::Int(3)), Some(Value::Int(1)), None, Some(Value::Int(2))],
+            vec![
+                Some(Value::Int(3)),
+                Some(Value::Int(1)),
+                None,
+                Some(Value::Int(2)),
+            ],
         ),
         Column::new("s", vec![s("a"), s("b"), s("a"), None]),
     ];
@@ -167,7 +184,10 @@ fn writer_is_deterministic() {
 fn number_format_and_tags_round_trip() {
     use openqvd::NumberFormat;
 
-    let mut col = Column::new("price", vec![Some(Value::Float(1.25)), Some(Value::Float(2.5))]);
+    let mut col = Column::new(
+        "price",
+        vec![Some(Value::Float(1.25)), Some(Value::Float(2.5))],
+    );
     col.number_format = NumberFormat {
         r#type: "MONEY".to_string(),
         n_dec: "2".to_string(),

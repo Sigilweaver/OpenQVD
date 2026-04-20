@@ -65,11 +65,12 @@ def scan_qvd(
     columns: Optional[List[str]] = None,
     filters: Optional[List[dict]] = None,
 ) -> pl.LazyFrame:
-    """Lazily scan a QVD file, returning a Polars LazyFrame.
+    """Read a QVD file eagerly and wrap it as a Polars LazyFrame.
 
-    The actual decoding is deferred until ``.collect()`` is called.
-    Column projection is applied in the Rust layer before Arrow arrays
-    are materialised.
+    Note: this currently performs an eager read under the hood and wraps
+    the result in ``.lazy()``.  Column projection and predicate pushdown
+    are still applied at the Rust level, so only the requested data is
+    decoded.
 
     Parameters
     ----------

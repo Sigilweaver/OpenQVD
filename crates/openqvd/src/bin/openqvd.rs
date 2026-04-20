@@ -188,7 +188,9 @@ fn print_value_row<W: Write>(out: &mut W, row: &[Option<Value>]) {
             Some(Value::Int(i)) => write!(out, "{i}").unwrap(),
             Some(Value::Float(f)) => write!(out, "{f}").unwrap(),
             Some(Value::Str(s)) => write!(out, "{}", s.replace(['\t', '\n'], " ")).unwrap(),
-            Some(Value::DualInt(d)) => write!(out, "{}", d.text.replace(['\t', '\n'], " ")).unwrap(),
+            Some(Value::DualInt(d)) => {
+                write!(out, "{}", d.text.replace(['\t', '\n'], " ")).unwrap()
+            }
             Some(Value::DualFloat(d)) => {
                 write!(out, "{}", d.text.replace(['\t', '\n'], " ")).unwrap()
             }

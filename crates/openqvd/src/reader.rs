@@ -431,7 +431,7 @@ fn le_bits_to_u128(bytes: &[u8]) -> u128 {
 fn extract_bits_wide(rec: &[u8], bit_offset: u32, bit_width: u32) -> u128 {
     // Slow path: only used if rec is longer than 16 bytes.
     let start_byte = (bit_offset / 8) as usize;
-    let end_byte = ((bit_offset + bit_width + 7) / 8) as usize;
+    let end_byte = (bit_offset + bit_width).div_ceil(8) as usize;
     let mut chunk: u128 = 0;
     for (i, &b) in rec[start_byte..end_byte].iter().enumerate() {
         chunk |= (b as u128) << (i * 8);

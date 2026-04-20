@@ -42,7 +42,11 @@ pub(crate) fn decode_field_symbols(
     Ok(out)
 }
 
-fn read_symbol(region: &[u8], start: usize, region_file_offset: usize) -> Result<(Value, usize), QvdError> {
+fn read_symbol(
+    region: &[u8],
+    start: usize,
+    region_file_offset: usize,
+) -> Result<(Value, usize), QvdError> {
     let tb = region[start];
     let p = start + 1;
     match tb {

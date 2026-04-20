@@ -5,6 +5,10 @@ binary file format, derived purely by binary analysis of publicly available
 sample files. The goal is a Rust reader and writer that the data science
 community can use without depending on any proprietary Qlik tooling.
 
+The specification was developed against the
+[QVD-Sources](https://github.com/openqvd/qvd-sources) corpus — a curated
+collection of ~1,100 publicly available `.qvd` files gathered from GitHub.
+
 ## Status
 
 Seven stages complete:
@@ -20,6 +24,27 @@ Seven stages complete:
 
 See `SPEC.md` for the current specification and `NOTES.md` for the
 working log of observations.
+
+### Rust usage
+
+```toml
+# Cargo.toml
+[dependencies]
+openqvd = "0.1"
+
+# Enable Arrow integration (PyArrow, RecordBatch, type inference):
+openqvd = { version = "0.1", features = ["arrow"] }
+```
+
+```rust
+use openqvd::Qvd;
+
+let qvd = Qvd::from_path("data.qvd").unwrap();
+println!("{} rows", qvd.num_rows());
+for row in qvd.rows() {
+    // row: Vec<Option<Value>>
+}
+```
 
 ### Reader
 

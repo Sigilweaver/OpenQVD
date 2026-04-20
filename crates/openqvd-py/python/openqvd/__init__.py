@@ -79,10 +79,9 @@ def read(
     path:
         Path to the ``.qvd`` file.
     columns:
-        Optional list of column names to load. Omitting a column is
-        equivalent to projection pushdown - the symbol table for skipped
-        columns is still parsed but no Arrow array is built for it. Pass
-        ``None`` (default) to load all columns.
+        Optional list of column names to load. When specified, symbol
+        tables for excluded columns are not decoded at all (projection
+        pushdown). Pass ``None`` (default) to load all columns.
     filters:
         Optional list of predicate-pushdown filter dicts. Each dict has:
 
@@ -148,5 +147,11 @@ def write(
 
     if isinstance(data, pa.Table):
         # Combine chunks so pyo3-arrow receives a single RecordBatch.
-        data = data.combine_chunks().to_batches()[0] if data.num_rows > 0 else data.slice(0).to_batches()[0]
+        batches = data.combine_chunks().to_batches()
+        if batches:
+            data = batches[0]
+        else:
+            # Empty table: build an empty RecordBatch from the schema.
+            arrays = [pa.array([], type=f.type) for f in data.schema]
+            data = pa.record_batch(arrays, schema=data.schema)
     _write(data, str(path), table_name)

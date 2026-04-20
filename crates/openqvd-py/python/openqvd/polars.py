@@ -6,3 +6,10 @@ from openqvd.polars_plugin import (  # noqa: F401
     read_qvd,
     scan_qvd,
 )
+
+__all__ = [
+    "read_qvd",
+    "scan_qvd",
+    "QvdDataFrameNamespace",
+    "QvdLazyFrameNamespace",
+]

@@ -8,6 +8,8 @@ edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/openqvd/openqvd"
 rust-version = "1.75"
+keywords = ["qvd", "qlik", "qlikview", "qliksense", "data"]
+categories = ["parser-implementations", "encoding"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

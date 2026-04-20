@@ -5,7 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Clean-room reader for Qlik QVD (.qvd) files."
+description = "Clean-room reader/writer for Qlik QVD (.qvd) files."
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
 
 [lints]
 workspace = true
@@ -31,4 +34,3 @@ name = "openqvd"
 path = "src/bin/openqvd.rs"
 
 [dev-dependencies]
-# (Populated in later stages.)

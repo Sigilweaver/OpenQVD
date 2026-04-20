@@ -30,7 +30,12 @@ fn main() -> ExitCode {
                 for (i, f) in qvd.fields().iter().enumerate().take(5) {
                     println!(
                         "    field[{i}] {:?} bits@{}+{} bias={} n_sym={} type={:?}",
-                        f.name, f.bit_offset, f.bit_width, f.bias, f.no_of_symbols, f.number_format.r#type
+                        f.name,
+                        f.bit_offset,
+                        f.bit_width,
+                        f.bias,
+                        f.no_of_symbols,
+                        f.number_format.r#type
                     );
                 }
                 for (ri, row) in qvd.rows().take(3).enumerate() {
