@@ -30,10 +30,10 @@ working log of observations.
 ```toml
 # Cargo.toml
 [dependencies]
-openqvd = "0.1"
+openqvd = "1"
 
 # Enable Arrow integration (PyArrow, RecordBatch, type inference):
-openqvd = { version = "0.1", features = ["arrow"] }
+openqvd = { version = "1", features = ["arrow"] }
 ```
 
 ```rust
