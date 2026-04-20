@@ -25,7 +25,7 @@ pandas = ["pandas>=1.5", "pyarrow>=12"]
 all = ["openqvd[polars,pandas]"]
 
 [project.urls]
-Repository = "https://github.com/openqvd/openqvd"
+Repository = "https://github.com/Sigilweaver/OpenQVD"
 
 [tool.maturin]
 python-source = "python"
