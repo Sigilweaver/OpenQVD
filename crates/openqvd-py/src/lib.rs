@@ -205,14 +205,46 @@ fn parse_py_filters(_py: Python<'_>, filters: &Bound<'_, pyo3::types::PyList>) -
 #[pyfunction]
 #[pyo3(signature = (path, columns=None, filters=None))]
 fn read(py: Python<'_>, path: &str, columns: Option<Vec<String>>, filters: Option<Bound<'_, pyo3::types::PyList>>) -> PyResult<PyRecordBatch> {
-    let qvd = openqvd::Qvd::from_path(path).map_err(to_py)?;
+    // Compute the set of columns whose symbol tables we actually need.
+    let rust_filters = match filters {
+        Some(ref f) if !f.is_empty() => Some(parse_py_filters(py, f)?),
+        _ => None,
+    };
+
+    let needed: Option<Vec<String>> = match (&columns, &rust_filters) {
+        (None, None) => None, // need all columns
+        _ => {
+            let mut set = std::collections::HashSet::new();
+            if let Some(cols) = &columns {
+                for c in cols { set.insert(c.clone()); }
+            }
+            if let Some(fs) = &rust_filters {
+                for f in fs { set.insert(f.column.clone()); }
+            }
+            // If only filters are set (no projection), we still need all
+            // columns for the output, so don't restrict symbol decoding.
+            if columns.is_none() {
+                None
+            } else {
+                Some(set.into_iter().collect())
+            }
+        }
+    };
+
+    let qvd = match &needed {
+        Some(names) => {
+            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+            openqvd::Qvd::from_path_projected(path, &refs).map_err(to_py)?
+        }
+        None => openqvd::Qvd::from_path(path).map_err(to_py)?,
+    };
+
     let col_refs: Option<Vec<&str>> = columns
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let batch = match filters {
-        Some(ref f) if !f.is_empty() => {
-            let rust_filters = parse_py_filters(py, f)?;
-            qvd.to_record_batch_filtered(col_refs.as_deref(), &rust_filters)
+    let batch = match rust_filters {
+        Some(ref fs) if !fs.is_empty() => {
+            qvd.to_record_batch_filtered(col_refs.as_deref(), fs)
                 .map_err(to_py)?
         }
         _ => {

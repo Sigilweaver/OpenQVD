@@ -40,8 +40,29 @@ impl Qvd {
         Self::from_bytes(bytes)
     }
 
+    /// Read and parse a QVD file from disk, decoding only the listed columns.
+    ///
+    /// See [`Self::from_bytes_projected`] for details.
+    pub fn from_path_projected(path: impl AsRef<Path>, needed: &[&str]) -> Result<Self, QvdError> {
+        let bytes = fs::read(path.as_ref())?;
+        Self::from_bytes_projected(bytes, needed)
+    }
+
     /// Parse a QVD file from a byte vector already in memory.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, QvdError> {
+        Self::from_bytes_impl(bytes, None)
+    }
+
+    /// Parse a QVD file, decoding symbol tables only for the named columns.
+    ///
+    /// Columns not in `needed` get an empty symbol table (every cell will
+    /// resolve to `None`).  This avoids the cost of decoding large string
+    /// symbol tables for columns that will never be read.
+    pub fn from_bytes_projected(bytes: Vec<u8>, needed: &[&str]) -> Result<Self, QvdError> {
+        Self::from_bytes_impl(bytes, Some(needed))
+    }
+
+    fn from_bytes_impl(bytes: Vec<u8>, needed: Option<&[&str]>) -> Result<Self, QvdError> {
         let (header, header_bytes) = parse(&bytes)?;
         let body: Vec<u8> = bytes[header_bytes..].to_vec();
 
@@ -86,7 +107,15 @@ impl Qvd {
 
         let mut symbol_tables = Vec::with_capacity(header.fields.len());
         for f in &header.fields {
-            symbol_tables.push(decode_field_symbols(&body, header_bytes, f)?);
+            let dominated = match needed {
+                None => false,
+                Some(names) => !names.iter().any(|n| *n == f.name),
+            };
+            if dominated {
+                symbol_tables.push(Vec::new());
+            } else {
+                symbol_tables.push(decode_field_symbols(&body, header_bytes, f)?);
+            }
         }
 
         // Row block must lie within the body.
