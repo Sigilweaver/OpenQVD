@@ -3,9 +3,14 @@ name = "openqvd-py"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
 repository.workspace = true
+homepage.workspace = true
 rust-version.workspace = true
 description = "Python bindings for the OpenQVD library."
+readme = "../../README.md"
+keywords.workspace = true
+categories.workspace = true
 
 [lib]
 name = "_openqvd"
@@ -16,8 +21,8 @@ crate-type = ["cdylib"]
 unsafe_code = "allow"
 
 [dependencies]
-openqvd = { path = "../openqvd", features = ["arrow"] }
-pyo3       = { version = "0.28", features = ["extension-module"] }
+openqvd = { version = "1.0.0", path = "../openqvd", features = ["arrow"] }
+pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-arrow = { version = "0.17" }
-arrow-array  = { version = "58" }
+arrow-array = { version = "58" }
 arrow-schema = { version = "58" }

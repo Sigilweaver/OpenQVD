@@ -3,10 +3,12 @@ resolver = "2"
 members = ["crates/openqvd", "crates/openqvd-py"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+authors = ["Nathan Riley <git@nathanriley.com>"]
 repository = "https://github.com/Sigilweaver/OpenQVD"
+homepage = "https://sigilweaver.app/openqvd"
 rust-version = "1.75"
 keywords = ["qvd", "qlik", "qlikview", "qliksense", "data"]
 categories = ["parser-implementations", "encoding"]

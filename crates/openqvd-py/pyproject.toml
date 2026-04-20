@@ -4,15 +4,22 @@ build-backend = "maturin"
 
 [project]
 name = "openqvd"
-version = "0.1.0"
-description = "Clean-room reader/writer for Qlik QVD files - Python bindings"
+version = "1.0.0"
+description = "Clean-room reader/writer for Qlik QVD files — Python bindings"
 readme = "../../README.md"
 license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
 requires-python = ">=3.9"
 classifiers = [
+    "Development Status :: 5 - Production/Stable",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
 ]
@@ -25,7 +32,9 @@ pandas = ["pandas>=1.5", "pyarrow>=12"]
 all = ["openqvd[polars,pandas]"]
 
 [project.urls]
+Homepage = "https://sigilweaver.app/openqvd"
 Repository = "https://github.com/Sigilweaver/OpenQVD"
+Changelog = "https://github.com/Sigilweaver/OpenQVD/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 python-source = "python"
