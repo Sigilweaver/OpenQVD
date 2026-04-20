@@ -6,7 +6,7 @@ sample files. The goal is a Rust reader and writer that the data science
 community can use without depending on any proprietary Qlik tooling.
 
 The specification was developed against the
-[QVD-Sources](https://github.com/openqvd/qvd-sources) corpus — a curated
+[QVD-Sources](https://github.com/Sigilweaver/QVD-Sources) corpus — a curated
 collection of ~1,100 publicly available `.qvd` files gathered from GitHub.
 
 ## Status
