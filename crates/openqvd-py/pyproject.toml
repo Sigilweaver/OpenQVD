@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "openqvd"
 version = "1.0.0"
 description = "Clean-room reader/writer for Qlik QVD files — Python bindings"
-readme = "../../README.md"
+readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
 authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
 requires-python = ">=3.9"
