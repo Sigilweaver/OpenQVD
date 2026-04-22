@@ -35,6 +35,16 @@ Convert to/from Pandas::
 
     df = openqvd.read("data.qvd").to_pandas()
 
+DuckDB integration::
+
+    import duckdb
+    import openqvd.duckdb as qdb
+
+    con = duckdb.connect()
+    qdb.register(con, "orders", "orders.qvd")
+    con.execute("SELECT COUNT(*) FROM orders").fetchone()
+    qdb.from_query("SELECT id FROM orders", "ids.qvd", con=con)
+
 """
 
 from __future__ import annotations

@@ -1,6 +1,27 @@
 # Changelog
 
-## 1.0.0
+## 1.1.0 - 2026-04-22
+
+### Added
+
+- **DuckDB integration** — new `openqvd.duckdb` module with three helpers:
+  - `openqvd.duckdb.register(con, name, path)` — register a QVD file as a named
+    view on an existing DuckDB connection (reads eagerly into Arrow, then registers).
+  - `openqvd.duckdb.to_relation(path, con=None, *, view_name=None)` — load a QVD
+    file as a DuckDB relation; optionally register it under a SQL view name.
+  - `openqvd.duckdb.from_query(source, path, *, con=None, table_name=None)` — write
+    a DuckDB SQL string or `DuckDBPyRelation` to a QVD file via Arrow interop.
+    Normalises both `pyarrow.Table` and `pyarrow.RecordBatchReader` return shapes
+    from `rel.arrow()` across DuckDB versions.
+- New `duckdb` optional extra (`pip install openqvd[duckdb]`) pulls in DuckDB +
+  PyArrow. The `all` extra now includes DuckDB as well.
+- 8 new pytest tests in `tests/test_duckdb.py` covering `to_relation`,
+  `register`, `from_query` with SQL string and relation inputs, table-name
+  embedding, error paths, and a full round-trip.
+
+---
+
+## 1.0.0 - 2026-04-20
 
 Initial public release.
 

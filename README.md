@@ -76,7 +76,7 @@ package that exposes a pure-Python API on top of the Rust library.
 ```sh
 cd crates/openqvd-py
 uv venv .venv && source .venv/bin/activate
-uv pip install maturin pyarrow polars pandas
+uv pip install maturin pyarrow polars pandas duckdb
 maturin develop
 ```
 
@@ -121,6 +121,33 @@ df = openqvd.read("data.qvd").to_pandas()
 The Python bindings read **1,044 of 1,047** valid corpus files (99.7%),
 matching the Rust reader baseline. The 3 failures are deliberately-
 corrupted test fixtures.
+
+### DuckDB integration
+
+```python
+import duckdb
+import openqvd.duckdb as qdb
+
+con = duckdb.connect()
+
+# Register a QVD file as a SQL view
+qdb.register(con, "orders", "orders.qvd")
+con.execute("SELECT COUNT(*) FROM orders WHERE Region = 'West'").fetchone()
+
+# Or get a relation directly
+rel = qdb.to_relation("orders.qvd", con)
+
+# Write a DuckDB query result to a QVD file
+qdb.from_query(
+    "SELECT id, amount FROM orders WHERE status = 'Open'",
+    "open_orders.qvd",
+    con=con,
+)
+```
+
+Install with `pip install openqvd[duckdb]`. DuckDB support is provided through
+Arrow interop; a native `read_qvd()` SQL table function would require a C++
+extension, which is out of scope.
 
 **Arrow type mapping**
 

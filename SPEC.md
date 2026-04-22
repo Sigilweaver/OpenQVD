@@ -1,15 +1,13 @@
-# OpenQVD file format specification (DRAFT)
+# OpenQVD file format specification
 
 > **License:** This specification document is licensed under
 > [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 > The accompanying software is AGPL-3.0-or-later.
 
-Status: work in progress, derived by binary analysis of a public corpus of
-~1,045 QVD files spanning Qlik build numbers 11000..50700+.
-
-This document is being written in stages. Each section is only added once
-the claim is supported by direct observation in the corpus. Speculation is
-marked explicitly.
+Derived by binary analysis of a public corpus of ~1,045 QVD files spanning
+Qlik build numbers 11000..50700+. Every claim in this document is supported
+by direct observation in the corpus; where an aspect has not been observed,
+it is noted explicitly.
 
 ## 0. Overview
 
@@ -328,12 +326,17 @@ are listed below. All begin with `$`.
 A reader must treat any tag string not in this table as an unknown
 informational marker and preserve it on round-trip.
 
-## Deferred topics
+## Known unknowns
 
-- Exact provenance of `CreateUtcTime` and related timestamp fields.
-- Any compressed variant (no sample present in the corpus).
-- Multi-table QVDs (none observed; QVD appears to be single-table by
-  design).
+- **Compressed variants**: the `<Compression>` element is present in every
+  observed file but always empty. No compressed sample has been found in the
+  corpus. A reader MAY reject any non-empty `<Compression>` value.
+- **`CreateUtcTime` provenance**: the timestamp is informational and is not
+  needed to decode the file. Its exact serialisation format (locale, epoch)
+  has not been pinned down.
+
+QVD is single-table by design: no multi-table variant has been observed in
+the corpus.
 
 ## 7. Writing a QVD file
 
@@ -478,4 +481,4 @@ least the following builds (truncated, top 15 by count): 50500, 11282,
 50501, 50506, 50642.
 
 No structural differences have been observed that correlate with build
-number within the scope covered by this draft.
+number.

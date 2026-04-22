@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "openqvd"
-version = "1.0.0"
+version = "1.1.0"
 description = "Clean-room reader/writer for Qlik QVD files — Python bindings"
 readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
@@ -29,7 +29,8 @@ dependencies = ["pyarrow>=12"]
 [project.optional-dependencies]
 polars = ["polars>=0.19"]
 pandas = ["pandas>=1.5", "pyarrow>=12"]
-all = ["openqvd[polars,pandas]"]
+duckdb = ["duckdb>=1.0", "pyarrow>=12"]
+all = ["openqvd[polars,pandas,duckdb]"]
 
 [project.urls]
 Homepage = "https://sigilweaver.app/openqvd"
