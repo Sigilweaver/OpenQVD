@@ -8,7 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Python bindings for the OpenQVD library."
-readme = "../../README.md"
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
