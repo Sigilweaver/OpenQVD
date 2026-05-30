@@ -7,7 +7,7 @@ name = "openqvd"
 version = "1.1.0"
 description = "Clean-room reader/writer for Qlik QVD files — Python bindings"
 readme = "../../README.md"
-license = { text = "AGPL-3.0-or-later" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
 requires-python = ">=3.9"
 classifiers = [
@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Information Analysis",
-    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "License :: OSI Approved :: Apache Software License",
 ]
 keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
 dependencies = ["pyarrow>=12"]

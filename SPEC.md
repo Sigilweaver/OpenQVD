@@ -2,7 +2,7 @@
 
 > **License:** This specification document is licensed under
 > [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
-> The accompanying software is AGPL-3.0-or-later.
+> The accompanying software is Apache-2.0.
 
 Derived by binary analysis of a public corpus of ~1,045 QVD files spanning
 Qlik build numbers 11000..50700+. Every claim in this document is supported

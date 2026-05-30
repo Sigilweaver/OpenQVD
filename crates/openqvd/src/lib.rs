@@ -1,6 +1,6 @@
 //! OpenQVD: clean-room reader for Qlik QVD files.
 //!
-//! Implements the specification in `SPEC.md` (AGPL-3.0-or-later). Derived
+//! Implements the specification in `SPEC.md` (Apache-2.0). Derived
 //! entirely from binary analysis of a public corpus; no existing QVD
 //! parsers have been consulted.
 //!

@@ -9,4 +9,4 @@ install instructions, quickstart, API reference, and format specification.
 pip install openqvd
 ```
 
-AGPL-3.0-or-later. Copyright 2026 Sigilweaver Holdings LLC.
+Apache-2.0. Copyright 2026 Sigilweaver Holdings LLC.

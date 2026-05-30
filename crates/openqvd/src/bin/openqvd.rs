@@ -48,7 +48,7 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "\
-openqvd - Qlik QVD reader/writer (AGPL-3.0-or-later)
+openqvd - Qlik QVD reader/writer (Apache-2.0)
 
 Usage:
   openqvd stat <file>
