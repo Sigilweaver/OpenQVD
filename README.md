@@ -1,10 +1,11 @@
 # OpenQVD
 
 [![CI](https://github.com/Sigilweaver/OpenQVD/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenQVD/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust MSRV](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
 [![crates.io](https://img.shields.io/crates/v/openqvd.svg)](https://crates.io/crates/openqvd)
 [![PyPI](https://img.shields.io/pypi/v/openqvd.svg)](https://pypi.org/project/openqvd/)
+[![docs.rs](https://img.shields.io/docsrs/openqvd)](https://docs.rs/openqvd)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust MSRV](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 
 A free, open, clean-room specification and implementation of the Qlik QVD
 binary file format, derived purely by binary analysis of publicly available
