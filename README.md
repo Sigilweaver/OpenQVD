@@ -1,6 +1,7 @@
 # OpenQVD
 
 [![CI](https://github.com/Sigilweaver/OpenQVD/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenQVD/actions/workflows/ci.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20470599.svg)](https://doi.org/10.5281/zenodo.20470599)
 [![crates.io](https://img.shields.io/crates/v/openqvd.svg)](https://crates.io/crates/openqvd)
 [![PyPI](https://img.shields.io/pypi/v/openqvd.svg)](https://pypi.org/project/openqvd/)
 [![docs.rs](https://img.shields.io/docsrs/openqvd)](https://docs.rs/openqvd)
