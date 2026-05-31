@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+title: "OpenQVD: A pure-Rust reader and writer for Qlik QVD files"
+message: >
+  If you use OpenQVD in your research, please cite it using the metadata
+  below. Citation is encouraged and appreciated but not legally required.
+type: software
+authors:
+  - family-names: Riley
+    given-names: Nathan
+    orcid: "https://orcid.org/0009-0004-1579-7312"
+    website: "https://github.com/Sigilweaver"
+repository-code: "https://github.com/Sigilweaver/OpenQVD"
+url: "https://sigilweaver.app"
+abstract: >
+  OpenQVD is a standalone, cross-platform reader and writer for Qlik QVD
+  (QlikView Data) files, implemented in pure Rust. Python bindings built on
+  PyO3 integrate with Polars, PyArrow, and Pandas, providing schema-aware
+  access to QVD's symbol-table and bit-stuffed-index storage layout without
+  requiring Qlik Sense or QlikView.
+license: "AGPL-3.0-or-later"
+license-url: "https://github.com/Sigilweaver/OpenQVD/blob/main/LICENSE"
+date-released: "2026-05-31"
+version: "1.1.0"
+keywords:
+  - QVD
+  - Qlik
+  - QlikView
+  - file format
+  - parser
+  - Apache Arrow
+  - Rust
+  - Python
+# Zenodo DOI - filled in after first GitHub-triggered Zenodo release.
+# After Zenodo mints the concept DOI, uncomment and replace the value below:
+# identifiers:
+#   - type: doi
+#     value: "10.5281/zenodo.XXXXXXXX"
+#     description: "Concept DOI (all versions) - Zenodo"
