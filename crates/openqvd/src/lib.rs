@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
 mod error;
 mod header;
@@ -30,6 +31,8 @@ mod reader;
 mod symbols;
 mod value;
 mod writer;
+
+pub(crate) mod bytes;
 
 #[cfg(feature = "arrow")]
 mod arrow;

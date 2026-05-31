@@ -51,20 +51,12 @@ fn read_symbol(
     let p = start + 1;
     match tb {
         0x01 => {
-            let bytes: [u8; 4] = region
-                .get(p..p + 4)
-                .ok_or_else(|| QvdError::structure("truncated i32 symbol"))?
-                .try_into()
-                .unwrap();
-            Ok((Value::Int(i32::from_le_bytes(bytes)), p + 4))
+            let v = crate::bytes::read_i32_le(region, p, "i32 symbol")?;
+            Ok((Value::Int(v), p + 4))
         }
         0x02 => {
-            let bytes: [u8; 8] = region
-                .get(p..p + 8)
-                .ok_or_else(|| QvdError::structure("truncated f64 symbol"))?
-                .try_into()
-                .unwrap();
-            Ok((Value::Float(f64::from_le_bytes(bytes)), p + 8))
+            let v = crate::bytes::read_f64_le(region, p, "f64 symbol")?;
+            Ok((Value::Float(v), p + 8))
         }
         0x04 => {
             let end = region[p..]
@@ -80,12 +72,7 @@ fn read_symbol(
             Ok((Value::Str(s), end + 1))
         }
         0x05 => {
-            let bytes: [u8; 4] = region
-                .get(p..p + 4)
-                .ok_or_else(|| QvdError::structure("truncated dual-int prefix"))?
-                .try_into()
-                .unwrap();
-            let number = i32::from_le_bytes(bytes);
+            let number = crate::bytes::read_i32_le(region, p, "dual-int prefix")?;
             let s_start = p + 4;
             let end = region[s_start..]
                 .iter()
@@ -100,12 +87,7 @@ fn read_symbol(
             Ok((Value::DualInt(Dual { number, text }), end + 1))
         }
         0x06 => {
-            let bytes: [u8; 8] = region
-                .get(p..p + 8)
-                .ok_or_else(|| QvdError::structure("truncated dual-float prefix"))?
-                .try_into()
-                .unwrap();
-            let number = f64::from_le_bytes(bytes);
+            let number = crate::bytes::read_f64_le(region, p, "dual-float prefix")?;
             let s_start = p + 8;
             let end = region[s_start..]
                 .iter()

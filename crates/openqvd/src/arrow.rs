@@ -632,7 +632,10 @@ pub fn record_batch_to_write_table(
             }
             DataType::Boolean => {
                 use arrow_array::BooleanArray;
-                let a = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
+                let a = arr
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .ok_or_else(|| QvdError::structure("arrow: expected BooleanArray"))?;
                 for i in 0..n {
                     cells.push(if a.is_null(i) {
                         None
@@ -684,7 +687,9 @@ pub fn record_batch_to_write_table(
                 let a = str_arr
                     .as_any()
                     .downcast_ref::<arrow_array::LargeStringArray>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        QvdError::structure("arrow: cast to LargeUtf8 produced unexpected type")
+                    })?;
                 for i in 0..n {
                     cells.push(if a.is_null(i) {
                         None

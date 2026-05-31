@@ -62,8 +62,8 @@ fn cmd_stat(args: &[String]) -> Result<(), String> {
     let path = args.first().ok_or("stat: missing file")?;
     let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
     let mut out = io::BufWriter::new(io::stdout().lock());
-    writeln!(out, "table: {}", q.table_name()).unwrap();
-    writeln!(out, "rows:  {}", q.num_rows()).unwrap();
+    writeln!(out, "table: {}", q.table_name()).map_err(|e| e.to_string())?;
+    writeln!(out, "rows:  {}", q.num_rows()).map_err(|e| e.to_string())?;
     writeln!(
         out,
         "record_byte_size: {}  row_block: offset={} length={}",
@@ -71,8 +71,8 @@ fn cmd_stat(args: &[String]) -> Result<(), String> {
         q.header().row_block_offset,
         q.header().row_block_length,
     )
-    .unwrap();
-    writeln!(out, "fields ({}):", q.fields().len()).unwrap();
+    .map_err(|e| e.to_string())?;
+    writeln!(out, "fields ({}):", q.fields().len()).map_err(|e| e.to_string())?;
     for (i, f) in q.fields().iter().enumerate() {
         writeln!(
             out,
@@ -91,7 +91,7 @@ fn cmd_stat(args: &[String]) -> Result<(), String> {
                 f.tags.join(" ")
             },
         )
-        .unwrap();
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -114,9 +114,9 @@ fn cmd_head(args: &[String]) -> Result<(), String> {
     }
     let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
     let mut out = io::BufWriter::new(io::stdout().lock());
-    print_header_row(&mut out, &q);
+    print_header_row(&mut out, &q)?;
     for row in q.rows().take(n_rows) {
-        print_value_row(&mut out, &row);
+        print_value_row(&mut out, &row)?;
     }
     Ok(())
 }
@@ -125,9 +125,9 @@ fn cmd_csv(args: &[String]) -> Result<(), String> {
     let path = args.first().ok_or("csv: missing file")?;
     let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
     let mut out = io::BufWriter::new(io::stdout().lock());
-    print_header_row(&mut out, &q);
+    print_header_row(&mut out, &q)?;
     for row in q.rows() {
-        print_value_row(&mut out, &row);
+        print_value_row(&mut out, &row)?;
     }
     Ok(())
 }
@@ -139,18 +139,18 @@ fn cmd_json(args: &[String]) -> Result<(), String> {
     let names: Vec<&str> = q.fields().iter().map(|f| f.name.as_str()).collect();
     for row in q.rows() {
         let mut first = true;
-        write!(out, "{{").unwrap();
+        write!(out, "{{").map_err(|e| e.to_string())?;
         for (name, cell) in names.iter().zip(&row) {
             if !first {
-                write!(out, ",").unwrap();
+                write!(out, ",").map_err(|e| e.to_string())?;
             }
             first = false;
-            write!(out, "\"").unwrap();
-            json_write_str(&mut out, name);
-            write!(out, "\":").unwrap();
-            write_json_value(&mut out, cell);
+            write!(out, "\"").map_err(|e| e.to_string())?;
+            json_write_str(&mut out, name)?;
+            write!(out, "\":").map_err(|e| e.to_string())?;
+            write_json_value(&mut out, cell)?;
         }
-        writeln!(out, "}}").unwrap();
+        writeln!(out, "}}").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -164,80 +164,88 @@ fn cmd_rewrite(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn print_header_row<W: Write>(out: &mut W, q: &Qvd) {
+fn print_header_row<W: Write>(out: &mut W, q: &Qvd) -> Result<(), String> {
     let mut first = true;
     for f in q.fields() {
         if !first {
-            write!(out, "\t").unwrap();
+            write!(out, "\t").map_err(|e| e.to_string())?;
         }
         first = false;
-        write!(out, "{}", f.name).unwrap();
+        write!(out, "{}", f.name).map_err(|e| e.to_string())?;
     }
-    writeln!(out).unwrap();
+    writeln!(out).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-fn print_value_row<W: Write>(out: &mut W, row: &[Option<Value>]) {
+fn print_value_row<W: Write>(out: &mut W, row: &[Option<Value>]) -> Result<(), String> {
     let mut first = true;
     for cell in row {
         if !first {
-            write!(out, "\t").unwrap();
+            write!(out, "\t").map_err(|e| e.to_string())?;
         }
         first = false;
         match cell {
             None => {}
-            Some(Value::Int(i)) => write!(out, "{i}").unwrap(),
-            Some(Value::Float(f)) => write!(out, "{f}").unwrap(),
-            Some(Value::Str(s)) => write!(out, "{}", s.replace(['\t', '\n'], " ")).unwrap(),
+            Some(Value::Int(i)) => write!(out, "{i}").map_err(|e| e.to_string())?,
+            Some(Value::Float(f)) => write!(out, "{f}").map_err(|e| e.to_string())?,
+            Some(Value::Str(s)) => {
+                write!(out, "{}", s.replace(['\t', '\n'], " ")).map_err(|e| e.to_string())?
+            }
             Some(Value::DualInt(d)) => {
-                write!(out, "{}", d.text.replace(['\t', '\n'], " ")).unwrap()
+                write!(out, "{}", d.text.replace(['\t', '\n'], " ")).map_err(|e| e.to_string())?
             }
             Some(Value::DualFloat(d)) => {
-                write!(out, "{}", d.text.replace(['\t', '\n'], " ")).unwrap()
+                write!(out, "{}", d.text.replace(['\t', '\n'], " ")).map_err(|e| e.to_string())?
             }
         }
     }
-    writeln!(out).unwrap();
+    writeln!(out).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-fn write_json_value<W: Write>(out: &mut W, cell: &Option<Value>) {
+fn write_json_value<W: Write>(out: &mut W, cell: &Option<Value>) -> Result<(), String> {
     match cell {
-        None => write!(out, "null").unwrap(),
-        Some(Value::Int(i)) => write!(out, "{i}").unwrap(),
+        None => write!(out, "null").map_err(|e| e.to_string())?,
+        Some(Value::Int(i)) => write!(out, "{i}").map_err(|e| e.to_string())?,
         Some(Value::Float(f)) => {
             if f.is_finite() {
-                write!(out, "{f}").unwrap()
+                write!(out, "{f}").map_err(|e| e.to_string())?
             } else {
-                write!(out, "null").unwrap()
+                write!(out, "null").map_err(|e| e.to_string())?
             }
         }
         Some(Value::Str(s)) => {
-            write!(out, "\"").unwrap();
-            json_write_str(out, s);
-            write!(out, "\"").unwrap();
+            write!(out, "\"").map_err(|e| e.to_string())?;
+            json_write_str(out, s)?;
+            write!(out, "\"").map_err(|e| e.to_string())?;
         }
-        Some(Value::DualInt(d)) => write!(out, "{}", d.number).unwrap(),
+        Some(Value::DualInt(d)) => write!(out, "{}", d.number).map_err(|e| e.to_string())?,
         Some(Value::DualFloat(d)) => {
             if d.number.is_finite() {
-                write!(out, "{}", d.number).unwrap()
+                write!(out, "{}", d.number).map_err(|e| e.to_string())?
             } else {
-                write!(out, "\"").unwrap();
-                json_write_str(out, &d.text);
-                write!(out, "\"").unwrap();
+                write!(out, "\"").map_err(|e| e.to_string())?;
+                json_write_str(out, &d.text)?;
+                write!(out, "\"").map_err(|e| e.to_string())?;
             }
         }
     }
+    Ok(())
 }
 
-fn json_write_str<W: Write>(out: &mut W, s: &str) {
+fn json_write_str<W: Write>(out: &mut W, s: &str) -> Result<(), String> {
     for c in s.chars() {
         match c {
-            '"' => write!(out, "\\\"").unwrap(),
-            '\\' => write!(out, "\\\\").unwrap(),
-            '\n' => write!(out, "\\n").unwrap(),
-            '\r' => write!(out, "\\r").unwrap(),
-            '\t' => write!(out, "\\t").unwrap(),
-            c if (c as u32) < 0x20 => write!(out, "\\u{:04x}", c as u32).unwrap(),
-            c => write!(out, "{c}").unwrap(),
+            '"' => write!(out, "\\\"").map_err(|e| e.to_string())?,
+            '\\' => write!(out, "\\\\").map_err(|e| e.to_string())?,
+            '\n' => write!(out, "\\n").map_err(|e| e.to_string())?,
+            '\r' => write!(out, "\\r").map_err(|e| e.to_string())?,
+            '\t' => write!(out, "\\t").map_err(|e| e.to_string())?,
+            c if (c as u32) < 0x20 => {
+                write!(out, "\\u{:04x}", c as u32).map_err(|e| e.to_string())?
+            }
+            c => write!(out, "{c}").map_err(|e| e.to_string())?,
         }
     }
+    Ok(())
 }
