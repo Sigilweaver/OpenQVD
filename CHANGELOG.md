@@ -6,18 +6,32 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Changed
-
-- **Relicensed from AGPL-3.0-or-later to Apache-2.0.** The
-  `LICENSE` file, all crate and Python package manifests, and all
-  source-file references have been updated. The specification
-  remains CC-BY-SA-4.0.
+## [1.2.0] - 2026-05-31
 
 ### Added
 
+- `CITATION.cff`: author identity (Nathan Riley + ORCID) and a
+  scaffolded `identifiers:` block ready for the Zenodo concept DOI.
 - `SECURITY.md` with private GHSA reporting policy.
 - `CONTRIBUTING.md` with PR checklist and DCO.
 - README badges (CI, license, MSRV, crates.io, PyPI).
+
+### Changed
+
+- **Relicensed from AGPL-3.0-or-later to Apache-2.0.** The `LICENSE`
+  file, all crate and Python package manifests, and all source-file
+  references have been updated. The specification remains
+  CC-BY-SA-4.0.
+- **Panic surface eliminated (WP17).** Library and CLI no longer
+  call `unwrap()` in production code: a new `bytes` helper module
+  (`read_i32/f64_le`) returns `Error::Parse` with byte offset,
+  Arrow downcasts use `ok_or_else(...)`, and CLI `writeln!` /
+  `write!` calls propagate via `?`. Library crates carry
+  `#![cfg_attr(not(test), warn(clippy::unwrap_used,
+  clippy::expect_used))]`.
+- README badge block unified across the Sigilweaver portfolio.
+- Documentation consolidated to a single root README; manifests
+  point at `../../README.md`.
 
 ## [1.1.0] - 2026-04-22
 

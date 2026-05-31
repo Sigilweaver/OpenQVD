@@ -17,7 +17,7 @@ abstract: >
   PyO3 integrate with Polars, PyArrow, and Pandas, providing schema-aware
   access to QVD's symbol-table and bit-stuffed-index storage layout without
   requiring Qlik Sense or QlikView.
-license: "AGPL-3.0-or-later"
+license: "Apache-2.0"
 license-url: "https://github.com/Sigilweaver/OpenQVD/blob/main/LICENSE"
 date-released: "2026-05-31"
 version: "1.1.0"
