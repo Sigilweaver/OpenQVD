@@ -37,12 +37,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **DuckDB integration** — new `openqvd.duckdb` module with three helpers:
-  - `openqvd.duckdb.register(con, name, path)` — register a QVD file as a named
+- **DuckDB integration** - new `openqvd.duckdb` module with three helpers:
+  - `openqvd.duckdb.register(con, name, path)` - register a QVD file as a named
     view on an existing DuckDB connection (reads eagerly into Arrow, then registers).
-  - `openqvd.duckdb.to_relation(path, con=None, *, view_name=None)` — load a QVD
+  - `openqvd.duckdb.to_relation(path, con=None, *, view_name=None)` - load a QVD
     file as a DuckDB relation; optionally register it under a SQL view name.
-  - `openqvd.duckdb.from_query(source, path, *, con=None, table_name=None)` — write
+  - `openqvd.duckdb.from_query(source, path, *, con=None, table_name=None)` - write
     a DuckDB SQL string or `DuckDBPyRelation` to a QVD file via Arrow interop.
     Normalises both `pyarrow.Table` and `pyarrow.RecordBatchReader` return shapes
     from `rel.arrow()` across DuckDB versions.
@@ -80,7 +80,7 @@ Initial public release.
 
 ### Python bindings (`openqvd`)
 
-- `openqvd.read()`, `openqvd.write()`, `openqvd.schema()` — PyArrow-native.
+- `openqvd.read()`, `openqvd.write()`, `openqvd.schema()` - PyArrow-native.
 - Projection and predicate pushdown from Python.
 - Polars integration: `pl.read_qvd`, `pl.scan_qvd`, `df.qvd.write`.
 - Pandas integration via PyArrow.

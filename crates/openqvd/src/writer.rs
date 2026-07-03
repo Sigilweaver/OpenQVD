@@ -333,7 +333,7 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
         }
     }
 
-    // Keep `symbols` alive — we may expose it later.
+    // Keep `symbols` alive - we may expose it later.
     for p in &plans {
         let _ = &p.symbols;
     }

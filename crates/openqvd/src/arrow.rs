@@ -338,9 +338,9 @@ enum BuilderEnum {
     Date32(Date32Builder),
     TimestampMicro(TimestampMicrosecondBuilder),
     DurationMicro(DurationMicrosecondBuilder),
-    /// Column with an empty symbol table — all rows are null.
+    /// Column with an empty symbol table - all rows are null.
     Null(usize),
-    /// Fallback for unrecognised types — emit as LargeUtf8.
+    /// Fallback for unrecognised types - emit as LargeUtf8.
     Fallback(LargeStringBuilder),
 }
 

@@ -189,7 +189,7 @@ not just a library.
 - Stream `to_write_table` to remove the memory amplification for very
   large files (>128 MiB). None exist in the public corpus today.
 
-## Stage 7 — Python bindings
+## Stage 7 - Python bindings
 
 ### PyO3 + maturin
 
@@ -215,7 +215,7 @@ Filters are resolved against symbol tables *before* row iteration.
 For each filter, `resolve_filter()` computes a set of symbol indices
 that satisfy the predicate (or, for NOT_IN, the set of indices that
 fail).  During row unpacking, rows whose symbol indices do not match
-any resolved filter are skipped entirely — no value decoding or Arrow
+any resolved filter are skipped entirely - no value decoding or Arrow
 append occurs for those rows.
 
 Supported operators: `eq`, `is_in`, `not_in`, `is_null`, `is_not_null`.
@@ -224,8 +224,8 @@ All comparisons are string-based (against `value_as_str` of each symbol).
 ### Corpus validation
 
 Full corpus run (1 089 files, 42 LFS stubs skipped):
-- **1 044 OK** — matches the Rust reader baseline exactly.
-- **3 FAIL** — same damaged fixtures that fail the Rust reader.
+- **1 044 OK** - matches the Rust reader baseline exactly.
+- **3 FAIL** - same damaged fixtures that fail the Rust reader.
 
 ### Test suite
 

@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "openqvd"
 version = "1.2.0"
-description = "Clean-room reader/writer for Qlik QVD files — Python bindings"
+description = "Clean-room reader/writer for Qlik QVD files - Python bindings"
 readme = "../../README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]

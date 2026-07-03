@@ -14,7 +14,7 @@ sample files. The goal is a Rust reader and writer that the data science
 community can use without depending on any proprietary Qlik tooling.
 
 The specification was developed against the
-[QVD-Sources](https://github.com/Sigilweaver/QVD-Sources) corpus — a curated
+[QVD-Sources](https://github.com/Sigilweaver/QVD-Sources) corpus - a curated
 collection of ~1,100 publicly available `.qvd` files gathered from GitHub.
 
 ## Status
@@ -28,7 +28,7 @@ Seven stages complete:
    decoder.
 5. Rust reader prototype (`crates/openqvd`) with edge-case tests.
 6. Writer + semantic round-trip tests.
-7. Python bindings (`crates/openqvd-py`) — PyArrow, Polars, Pandas.
+7. Python bindings (`crates/openqvd-py`) - PyArrow, Polars, Pandas.
 
 See `SPEC.md` for the current specification and `NOTES.md` for the
 working log of observations.
