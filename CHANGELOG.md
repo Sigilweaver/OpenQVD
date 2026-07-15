@@ -6,6 +6,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- Zenodo DOI badge and `identifiers:` entry in `CITATION.cff`.
+- `.github/PULL_REQUEST_TEMPLATE.md` and a bug report issue template.
+- `cargo-audit` CI workflow (`.github/workflows/audit.yml`), running on
+  every push/PR touching `Cargo.lock`/manifests plus a weekly schedule.
+
+### Changed
+
+- `CONTRIBUTING.md` overhaul: PRs of any size are welcome without an
+  issue first, plus explicit Conventional Commits, ASCII-only, and
+  security-reporting requirements.
+- Replaced remaining em-dashes with ASCII hyphens across docs and
+  source comments.
+
 ## [1.2.0] - 2026-05-31
 
 ### Added

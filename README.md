@@ -59,7 +59,7 @@ for row in qvd.rows() {
 The Rust reader parses **1,044 of 1,047** valid public QVD samples. The
 three remaining files are deliberately-corrupted test fixtures from
 third-party projects (two named `damaged.qvd`, one with invalid UTF-8).
-10 unit + integration tests cover bias-based NULL, 2+6 bit packing,
+11 unit + integration tests cover bias-based NULL, 2+6 bit packing,
 zero-width fields, every symbol type byte, unknown-type rejection,
 overlapping bit-fields rejection, inconsistent root `Length`
 rejection, and the LF-terminator header variant.
@@ -69,7 +69,7 @@ rejection, and the LF-terminator header variant.
 A compliant writer is implemented in `crates/openqvd::writer`. Running
 `read -> write -> read` over the entire corpus yields **1,093 of 1,093
 valid files semantically equivalent** (same row count, same field
-names, byte-for-byte equal cell values). 9 writer tests cover NULL
+names, byte-for-byte equal cell values). 11 writer tests cover NULL
 handling, all five symbol types, zero-width collapse for constant
 columns, 500-distinct wide columns, NUL-in-string rejection,
 uneven-column rejection, and deterministic output.

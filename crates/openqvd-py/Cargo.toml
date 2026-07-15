@@ -21,7 +21,7 @@ crate-type = ["cdylib"]
 unsafe_code = "allow"
 
 [dependencies]
-openqvd = { version = "1.0.0", path = "../openqvd", features = ["arrow"] }
+openqvd = { version = "1.2", path = "../openqvd", features = ["arrow"] }
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-arrow = { version = "0.17" }
 arrow-array = { version = "58" }
