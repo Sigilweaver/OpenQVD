@@ -20,7 +20,13 @@ pub(crate) fn decode_field_symbols(
     }
     let region = &body[start..end];
     let mut cursor = 0usize;
-    let mut out: Vec<Value> = Vec::with_capacity(field.no_of_symbols as usize);
+    // `no_of_symbols` is a file-controlled count read before this loop runs;
+    // a crafted field could declare billions of symbols backed by only a
+    // few actual bytes. Every symbol consumes at least one byte (the type
+    // tag), so `region.len()` is a tight, always-correct upper bound on how
+    // many symbols this region can actually hold - use it instead of
+    // trusting the declared count directly.
+    let mut out: Vec<Value> = Vec::with_capacity((field.no_of_symbols as usize).min(region.len()));
     for _ in 0..field.no_of_symbols {
         if cursor >= region.len() {
             return Err(QvdError::structure(format!(
@@ -105,5 +111,40 @@ fn read_symbol(
             byte: other,
             offset: region_file_offset + start,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::header::NumberFormat;
+
+    fn field(no_of_symbols: u32, length: u32) -> FieldHeader {
+        FieldHeader {
+            name: "f".into(),
+            bit_offset: 0,
+            bit_width: 0,
+            bias: 0,
+            no_of_symbols,
+            offset: 0,
+            length,
+            number_format: NumberFormat::default(),
+            tags: Vec::new(),
+        }
+    }
+
+    /// Regression test: `no_of_symbols` is a file-controlled count read
+    /// before the bounded decode loop below runs. Before capping the
+    /// pre-allocation at `region.len()`, a field claiming billions of
+    /// symbols backed by only a couple of actual bytes would force a
+    /// multi-GB `Vec::with_capacity` up front, regardless of how much
+    /// symbol data actually follows. It should instead run out of symbol
+    /// bytes and error immediately.
+    #[test]
+    fn huge_no_of_symbols_with_tiny_region_errors_without_large_alloc() {
+        let body = [0x04, 0x00]; // one empty string symbol, 2 bytes
+        let f = field(u32::MAX, body.len() as u32);
+        let err = decode_field_symbols(&body, 0, &f).unwrap_err();
+        assert!(err.to_string().contains("ran out of symbol bytes"), "{err}");
     }
 }

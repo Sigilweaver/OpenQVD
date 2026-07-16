@@ -6,6 +6,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- `decode_field_symbols` (`symbols.rs`) sized its per-field `Vec` from the
+  file-controlled `NoOfSymbols` count before the bounded decode loop ran, so
+  a field claiming billions of symbols backed by only a few actual bytes
+  could force a multi-GB up-front allocation. The pre-allocation is now
+  capped at the actual symbol region's length, since every symbol consumes
+  at least one byte.
+- `Qvd::to_write_table` (`reader.rs`) sized each column's `Vec` from
+  `NoOfRecords` directly. `NoOfRecords` is bounded by the row block's real
+  size whenever `RecordByteSize > 0`, but a degenerate header with
+  `RecordByteSize == 0` leaves it unconstrained, so a crafted count could
+  force the same class of oversized allocation. Pre-allocation is now
+  capped at a generous fixed ceiling (256 MiB worth of rows); larger row
+  counts are still produced correctly via the Vec's normal growth.
+  Fixes #1. (@Nabejo)
+
 ### Added
 
 - Zenodo DOI badge and `identifiers:` entry in `CITATION.cff`.

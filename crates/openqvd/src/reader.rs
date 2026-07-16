@@ -6,6 +6,15 @@ use crate::header::{parse, FieldHeader, TableHeader};
 use crate::symbols::decode_field_symbols;
 use crate::value::{Cell, Value};
 
+/// Upper bound on how many rows [`Qvd::to_write_table`] will eagerly
+/// pre-allocate `Vec` capacity for, per column. 256 MiB worth of `Cell`s is
+/// far beyond any real QVD extract's row count and cheap to allocate, while
+/// still ruling out a crafted `NoOfRecords` forcing a multi-GB allocation
+/// (see the comment at its use site for why `NoOfRecords` alone isn't a
+/// trustworthy bound here).
+const MAX_PREALLOC_ROWS: usize = 256 * 1024 * 1024 / std::mem::size_of::<Cell>();
+const _: () = assert!(MAX_PREALLOC_ROWS > 0 && MAX_PREALLOC_ROWS < u32::MAX as usize);
+
 fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -291,13 +300,24 @@ impl Qvd {
     /// programmatic rewriting.
     pub fn to_write_table(&self) -> crate::WriteTable {
         let n_rows = self.num_rows() as usize;
+        // `no_of_records` is bounded by the actual row block size in
+        // `from_bytes_impl` whenever `record_byte_size > 0` (row_block_length
+        // = no_of_records * record_byte_size <= body.len()). But a
+        // degenerate header with `record_byte_size == 0` leaves
+        // `no_of_records` unconstrained by any real file size, so a crafted
+        // count could otherwise force a huge up-front `Vec::with_capacity`
+        // per column here. Cap the pre-allocation at a generous fixed
+        // ceiling instead of trusting `n_rows` directly; rows beyond it are
+        // still produced correctly via the push loop below, just through
+        // the Vec's normal growth.
+        let prealloc = n_rows.min(MAX_PREALLOC_ROWS);
         let mut columns: Vec<crate::Column> = self
             .header
             .fields
             .iter()
             .map(|f| crate::Column {
                 name: f.name.clone(),
-                cells: Vec::with_capacity(n_rows),
+                cells: Vec::with_capacity(prealloc),
                 number_format: f.number_format.clone(),
                 tags: f.tags.clone(),
             })
