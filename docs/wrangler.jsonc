@@ -1,0 +1,17 @@
+{
+    "name": "openqvd-docs",
+    "compatibility_date": "2024-11-26",
+    "assets": {
+        "directory": "./build"
+    },
+    "routes": [
+        {
+            "pattern": "sigilweaver.app/openqvd/docs",
+            "zone_name": "sigilweaver.app"
+        },
+        {
+            "pattern": "sigilweaver.app/openqvd/docs/*",
+            "zone_name": "sigilweaver.app"
+        }
+    ]
+}

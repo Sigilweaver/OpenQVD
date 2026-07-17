@@ -8,6 +8,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Docusaurus docs site (`docs/`), deploying to
+  `sigilweaver.app/openqvd/docs/` for parity with the other readers in
+  the portfolio. Covers intro, install, CLI/Rust/Python quickstarts, a
+  full CLI reference, a Python API reference (core `read`/`write`/
+  `schema` plus the Polars and DuckDB integrations), and a format
+  orientation page pointing into `SPEC.md`. A `Docs` badge was added to
+  the root README. (@Nabejo)
 - Zenodo DOI badge and `identifiers:` entry in `CITATION.cff`.
 - `.github/PULL_REQUEST_TEMPLATE.md` and a bug report issue template.
 - `cargo-audit` CI workflow (`.github/workflows/audit.yml`), running on
