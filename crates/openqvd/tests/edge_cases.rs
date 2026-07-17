@@ -143,6 +143,43 @@ fn zero_width_field_always_picks_symbol_zero() {
     assert_eq!(qvd.symbols(0).unwrap().len(), 1);
 }
 
+/// `to_write_table` on a degenerate `RecordByteSize=0` header (every field
+/// zero-width, so every row resolves to symbol index 0) must still produce
+/// the declared row count correctly. This is the header shape that lets
+/// `NoOfRecords` grow far past what the row block's actual byte length
+/// would otherwise bound it to.
+#[test]
+fn to_write_table_handles_zero_record_byte_size() {
+    let fields = concat!(
+        "    <QvdFieldHeader>\r\n",
+        "      <FieldName>c</FieldName>\r\n",
+        "      <BitOffset>0</BitOffset>\r\n",
+        "      <BitWidth>0</BitWidth>\r\n",
+        "      <Bias>0</Bias>\r\n",
+        "      <NumberFormat><Type>UNKNOWN</Type></NumberFormat>\r\n",
+        "      <NoOfSymbols>1</NoOfSymbols>\r\n",
+        "      <Offset>0</Offset>\r\n",
+        "      <Length>6</Length>\r\n",
+        "      <Tags></Tags>\r\n",
+        "    </QvdFieldHeader>\r\n",
+    );
+    let extras = concat!(
+        "  <RecordByteSize>0</RecordByteSize>\r\n",
+        "  <NoOfRecords>7</NoOfRecords>\r\n",
+        "  <Offset>6</Offset>\r\n",
+        "  <Length>0</Length>\r\n",
+    );
+    let sym = [0x04, b'k', b'o', b'n', b's', 0x00];
+    let qvd = Qvd::from_bytes(build_qvd(fields, extras, &sym, &[])).expect("decode");
+    let table = qvd.to_write_table();
+    assert_eq!(table.columns.len(), 1);
+    assert_eq!(table.columns[0].cells.len(), 7);
+    assert!(table.columns[0]
+        .cells
+        .iter()
+        .all(|c| matches!(c, Some(Value::Str(s)) if s == "kons")));
+}
+
 /// A field whose symbol table is all five types at once, to pin decoder
 /// behaviour for every variant observed in the corpus.
 #[test]
