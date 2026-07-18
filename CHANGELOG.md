@@ -12,6 +12,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `.github/PULL_REQUEST_TEMPLATE.md` and a bug report issue template.
 - `cargo-audit` CI workflow (`.github/workflows/audit.yml`), running on
   every push/PR touching `Cargo.lock`/manifests plus a weekly schedule.
+- `scripts/check-release-ready.sh` and `RELEASING.md`: pre-tag check that
+  the target commit's most recent `ci.yml` and `audit.yml` runs both
+  completed successfully, plus a short release checklist (closes #7).
 
 ### Changed
 
