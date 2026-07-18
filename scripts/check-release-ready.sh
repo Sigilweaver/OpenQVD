@@ -20,7 +20,10 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-SHA="$(git rev-parse "$REF")"
+# `^{commit}` peels annotated tags to the commit they point at; git rev-parse
+# on an annotated tag alone returns the tag object's own SHA, which never
+# matches a workflow run's head SHA.
+SHA="$(git rev-parse "${REF}^{commit}")"
 echo "Checking release readiness for ${REF} (${SHA})"
 
 check_workflow() {
