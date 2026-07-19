@@ -215,8 +215,8 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                 stack.pop();
             }
             Event::Text(t) => {
-                let s = t
-                    .unescape()
+                let decoded = t.decode().map_err(|e| QvdError::Xml(e.to_string()))?;
+                let s = quick_xml::escape::unescape(&decoded)
                     .map_err(|e| QvdError::Xml(e.to_string()))?
                     .into_owned();
                 text_buf.push_str(&s);

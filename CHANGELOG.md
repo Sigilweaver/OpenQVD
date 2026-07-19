@@ -47,6 +47,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   security-reporting requirements.
 - Replaced remaining em-dashes with ASCII hyphens across docs and
   source comments.
+- Bumped `quick-xml` to 0.41 and `pyo3`/`pyo3-arrow` to 0.29/0.19
+  (with `arrow-*` bumped to 59 to match), clearing the RUSTSEC
+  advisories tracked in #4; `.github/workflows/audit.yml` no longer
+  ignores them.
+- CI (`.github/workflows/ci.yml`) now runs the Rust and Python test
+  matrices on `macos-latest` and `windows-latest` in addition to
+  `ubuntu-latest`, matching the platforms the wheel-building workflow
+  ships for (#2). Unverified on real Windows/macOS runners as of this
+  change; watch the first CI run on `main`.
 
 ## [1.2.0] - 2026-05-31
 
