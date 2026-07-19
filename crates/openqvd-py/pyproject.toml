@@ -24,12 +24,12 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
 ]
 keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
-dependencies = ["pyarrow>=12"]
+dependencies = ["pyarrow>=25.0.0"]
 
 [project.optional-dependencies]
 polars = ["polars>=0.19"]
-pandas = ["pandas>=1.5", "pyarrow>=12"]
-duckdb = ["duckdb>=1.0", "pyarrow>=12"]
+pandas = ["pandas>=1.5", "pyarrow>=25.0.0"]
+duckdb = ["duckdb>=1.0", "pyarrow>=25.0.0"]
 all = ["openqvd[polars,pandas,duckdb]"]
 
 [project.urls]
