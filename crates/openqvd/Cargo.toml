@@ -21,7 +21,7 @@ arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-cast"]
 
 [dependencies]
 quick-xml = { version = "0.41", features = ["serialize"] }
-thiserror = "1"
+thiserror = "2"
 # Optional Arrow integration
 arrow-array = { version = "59", optional = true }
 arrow-schema = { version = "59", optional = true }
