@@ -9,13 +9,12 @@ description = "Clean-room reader/writer for Qlik QVD files - Python bindings"
 readme = "../../README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -24,12 +23,12 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
 ]
 keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
-dependencies = ["pyarrow>=12"]
+dependencies = ["pyarrow>=25.0.0"]
 
 [project.optional-dependencies]
 polars = ["polars>=0.19"]
-pandas = ["pandas>=1.5", "pyarrow>=12"]
-duckdb = ["duckdb>=1.0", "pyarrow>=12"]
+pandas = ["pandas>=1.5", "pyarrow>=25.0.0"]
+duckdb = ["duckdb>=1.0", "pyarrow>=25.0.0"]
 all = ["openqvd[polars,pandas,duckdb]"]
 
 [project.urls]
