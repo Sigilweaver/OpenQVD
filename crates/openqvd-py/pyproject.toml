@@ -28,7 +28,7 @@ dependencies = ["pyarrow>=25.0.0"]
 [project.optional-dependencies]
 polars = ["polars>=1.43.0"]
 pandas = ["pandas>=2.3.3", "pyarrow>=25.0.0"]
-duckdb = ["duckdb>=1.5.4", "pyarrow>=25.0.0"]
+duckdb = ["duckdb>=1.5.5", "pyarrow>=25.0.0"]
 all = ["openqvd[polars,pandas,duckdb]"]
 
 [project.urls]
