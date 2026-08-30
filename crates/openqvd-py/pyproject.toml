@@ -26,7 +26,7 @@ keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
 dependencies = ["pyarrow>=25.0.1"]
 
 [project.optional-dependencies]
-polars = ["polars>=1.43.2"]
+polars = ["polars>=1.44.1"]
 pandas = ["pandas>=2.3.3", "pyarrow>=25.0.1"]
 duckdb = ["duckdb>=1.5.5", "pyarrow>=25.0.1"]
 all = ["openqvd[polars,pandas,duckdb]"]
