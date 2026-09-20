@@ -25,7 +25,7 @@ thiserror = "2"
 # Optional Arrow integration
 arrow-array = { version = "59", optional = true }
 arrow-schema = { version = "59", optional = true }
-arrow-cast = { version = "59", optional = true }
+arrow-cast = { version = "60", optional = true }
 
 [[bin]]
 name = "openqvd"
