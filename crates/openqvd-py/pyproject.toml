@@ -1,13 +1,14 @@
 [build-system]
-requires = ["maturin>=1.14.1,<2"]
+# Maturin 1.14+ safely relocates parent-relative README and license paths.
+requires = ["maturin==1.14.1"]
 build-backend = "maturin"
 
 [project]
 name = "openqvd"
-version = "1.2.0"
+version = "2.0.0"
 description = "Clean-room reader/writer for Qlik QVD files - Python bindings"
 readme = "../../README.md"
-license = { text = "Apache-2.0" }
+license = { file = "../../LICENSE" }
 authors = [{ name = "Nathan Riley", email = "git@nathanriley.com" }]
 requires-python = ">=3.10"
 classifiers = [
