@@ -6,6 +6,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Python tests read the corpus location from `OPENQVD_CORPUS_DIR` instead of
+  a fixed path, and fail instead of skipping when `REQUIRE_CORPUS=1` and a
+  corpus file is missing.
+
 ## [2.0.0] - 2026-10-17
 
 ### Breaking
