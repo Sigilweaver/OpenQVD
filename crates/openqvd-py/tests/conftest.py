@@ -1,9 +1,24 @@
 """Shared fixtures for openqvd Python tests."""
 
+import os
 import pathlib
 import pytest
 
-CORPUS_DIR = pathlib.Path("/workspaces/QVD/QVD-Sources/downloads")
+# Root of the QVD-Sources downloads. Set REQUIRE_CORPUS=1 to fail instead of
+# skipping when a corpus file is missing.
+CORPUS_DIR = pathlib.Path(
+    os.environ.get("OPENQVD_CORPUS_DIR", "/workspaces/QVD/QVD-Sources/downloads")
+)
+REQUIRE_CORPUS = os.environ.get("REQUIRE_CORPUS") == "1"
+
+
+def _corpus_file(relative):
+    p = CORPUS_DIR / relative
+    if not p.exists():
+        if REQUIRE_CORPUS:
+            pytest.fail(f"REQUIRE_CORPUS=1 but corpus file is missing: {p}")
+        pytest.skip(f"corpus not available (set OPENQVD_CORPUS_DIR): {p}")
+    return str(p)
 
 
 def _find_corpus_files():
@@ -38,16 +53,10 @@ def corpus_dir():
 @pytest.fixture
 def sample_qvd():
     """Path to a small known-good QVD file (SalesReps.qvd, 4 rows x 2 cols)."""
-    p = CORPUS_DIR / "qlikperf/TSEEQ/Utility/QVD ShrinQer/original_qvds/SalesReps.qvd"
-    if not p.exists():
-        pytest.skip("corpus not available")
-    return str(p)
+    return _corpus_file("qlikperf/TSEEQ/Utility/QVD ShrinQer/original_qvds/SalesReps.qvd")
 
 
 @pytest.fixture
 def multi_type_qvd():
     """Path to tab1.qvd which has mixed types including NULLs."""
-    p = CORPUS_DIR / "korolmi/qvdfile/qvdfile/data/tab1.qvd"
-    if not p.exists():
-        pytest.skip("corpus not available")
-    return str(p)
+    return _corpus_file("korolmi/qvdfile/qvdfile/data/tab1.qvd")

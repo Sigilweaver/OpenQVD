@@ -6,6 +6,31 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- Python tests read the corpus location from `OPENQVD_CORPUS_DIR` instead of
+  a fixed path, and fail instead of skipping when `REQUIRE_CORPUS=1` and a
+  corpus file is missing.
+- Bumped `quick-xml` to 0.42 and `thiserror` to 2.0.21. QVD header parsing
+  behaves as before.
+
+## [2.0.0] - 2026-10-17
+
+### Breaking
+
+- Python 3.9 is no longer supported; Python 3.10 or later is required.
+- The Rust `arrow` feature now exposes Arrow 59 types instead of Arrow 58
+  types. Downstream Rust applications must use matching Arrow dependencies.
+- Python dependency minimums are now PyArrow 25.0.1, Polars 1.43.2,
+  Pandas 2.3.3, and DuckDB 1.5.5 for the corresponding integrations.
+
+### Fixed
+
+- Pin the Python build backend to Maturin 1.14.1, which safely relocates the
+  workspace README into the sdist instead of creating parent-relative
+  archive paths. Include the workspace Apache-2.0 LICENSE in both the
+  sdist and wheel through the Python project's license file metadata.
+
 ### Security
 
 - `decode_field_symbols` (`symbols.rs`) sized its per-field `Vec` from the
