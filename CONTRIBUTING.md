@@ -13,8 +13,13 @@ cargo test --workspace
 # Python bindings (editable)
 cd crates/openqvd-py
 maturin develop --release --features pyo3/extension-module
-pytest tests/
+OPENQVD_CORPUS_DIR=/path/to/QVD-Sources/downloads REQUIRE_CORPUS=1 pytest tests/
 ```
+
+Most Python tests read files from the
+[QVD-Sources](https://github.com/Sigilweaver/QVD-Sources) corpus. Without
+`OPENQVD_CORPUS_DIR` they skip; with `REQUIRE_CORPUS=1` a missing file fails
+the run instead.
 
 ## Contributing code (pull requests)
 

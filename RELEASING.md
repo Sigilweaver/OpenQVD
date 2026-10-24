@@ -40,9 +40,17 @@ Run `cargo build --workspace` (or `cargo check --workspace`) afterwards so
 `Cargo.lock` picks up the new `openqvd`/`openqvd-py` versions.
 
 If this is a major version bump, also check
-`crates/openqvd-py/Cargo.toml`'s `openqvd = { version = "1.2", path =
+`crates/openqvd-py/Cargo.toml`'s `openqvd = { version = "2.0.0", path =
 "../openqvd", ... }` dependency line - Cargo's default caret matching
 means a minor/patch bump doesn't need it touched, but a major bump does.
+
+Python builds use the exact Maturin version pinned in `pyproject.toml`
+(currently 1.14.1). Maturin 1.14+ safely relocates the parent-relative
+workspace README and LICENSE paths into the sdist. The project's
+`license = { file = "../../LICENSE" }` also includes LICENSE in the wheel.
+PEP 639 `license-files` globs cannot contain `..`, so they cannot directly
+reference this workspace-level file. Inspect both archives and rebuild a
+wheel from the extracted sdist before publishing.
 
 ## 3. Update CHANGELOG.md
 
