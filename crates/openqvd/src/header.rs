@@ -125,7 +125,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
     loop {
         match r.read_event().map_err(|e| QvdError::Xml(e.to_string()))? {
             Event::Start(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let name = e.name().as_ref().to_owned();
                 if name == "QvdFieldHeader" {
                     current = Some(FieldHeader {
                         name: String::new(),
@@ -147,7 +147,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                 text_buf.clear();
             }
             Event::End(e) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+                let name = e.name().as_ref().to_owned();
                 // Parent context is the element *above* this one, i.e. the
                 // second-to-last entry on the stack.
                 let parent = stack
@@ -215,8 +215,9 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                 stack.pop();
             }
             Event::Text(t) => {
-                let decoded = t.decode().map_err(|e| QvdError::Xml(e.to_string()))?;
-                let s = quick_xml::escape::unescape(&decoded)
+                // quick-xml 0.42 reads from `&str`, so the text is already
+                // UTF-8 and only entity unescaping can fail.
+                let s = quick_xml::escape::unescape(&t)
                     .map_err(|e| QvdError::Xml(e.to_string()))?
                     .into_owned();
                 text_buf.push_str(&s);
