@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use openqvd::{Qvd, Value};
+use openqvd::{Qvd, ReadOptions, Value};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -99,10 +99,10 @@ fn try_one(p: &Path) -> Result<Outcome, String> {
         return Ok(Outcome::Skip);
     }
 
-    let a = Qvd::from_bytes(bytes).map_err(|e| format!("read A: {e}"))?;
+    let a = Qvd::parse(bytes, &ReadOptions::default()).map_err(|e| format!("read A: {e}"))?;
     // Use the streaming Qvd->bytes path (no intermediate WriteTable).
     let rewritten = a.to_bytes().map_err(|e| format!("write: {e}"))?;
-    let b = Qvd::from_bytes(rewritten).map_err(|e| format!("read B: {e}"))?;
+    let b = Qvd::parse(rewritten, &ReadOptions::default()).map_err(|e| format!("read B: {e}"))?;
 
     if a.num_rows() != b.num_rows() {
         return Err(format!("row count: {} != {}", a.num_rows(), b.num_rows()));
@@ -124,6 +124,8 @@ fn try_one(p: &Path) -> Result<Outcome, String> {
         match (ia.next(), ib.next()) {
             (None, None) => break,
             (Some(ra), Some(rb)) => {
+                let ra = ra.map_err(|e| format!("row {idx} in A: {e}"))?;
+                let rb = rb.map_err(|e| format!("row {idx} in B: {e}"))?;
                 for (j, (ca, cb)) in ra.iter().zip(&rb).enumerate() {
                     if !cells_equal(ca, cb) {
                         return Err(format!(

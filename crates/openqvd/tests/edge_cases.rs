@@ -2,6 +2,10 @@
 
 use openqvd::{Qvd, Value};
 
+fn parse(bytes: Vec<u8>) -> Result<Qvd, openqvd::QvdError> {
+    Qvd::parse(bytes, &openqvd::ReadOptions::default())
+}
+
 fn build_qvd(fields_xml: &str, extras: &str, symbols: &[u8], rows: &[u8]) -> Vec<u8> {
     let xml = format!(
         concat!(
@@ -52,8 +56,8 @@ fn bias_negative_produces_null() {
     // Rows: 0 -> NULL (0 + -2 = -2), 2 -> "X" (2-2=0), 3 -> "Y" (3-2=1)
     let rows = [0x00, 0x02, 0x03];
     let bytes = build_qvd(fields, extras, &sym, &rows);
-    let qvd = Qvd::from_bytes(bytes).expect("decode");
-    let rs: Vec<_> = qvd.rows().collect();
+    let qvd = parse(bytes).expect("decode");
+    let rs: Vec<_> = qvd.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(rs[0][0], None);
     assert_eq!(rs[1][0], Some(Value::Str("X".into())));
     assert_eq!(rs[2][0], Some(Value::Str("Y".into())));
@@ -106,8 +110,8 @@ fn packed_2_plus_6_bits() {
     // Row 0: a=1, b=2  -> byte = (b << 2) | a = (2<<2)|1 = 0x09
     // Row 1: a=2, b=0  -> byte = 0x02
     let rows = [0x09u8, 0x02];
-    let qvd = Qvd::from_bytes(build_qvd(fields, extras, &sym, &rows)).expect("decode");
-    let got: Vec<_> = qvd.rows().collect();
+    let qvd = parse(build_qvd(fields, extras, &sym, &rows)).expect("decode");
+    let got: Vec<_> = qvd.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(got[0][0], Some(Value::Str("Q".into())));
     assert!(matches!(&got[0][1], Some(Value::DualInt(d)) if d.number == 3 && d.text == "3"));
     assert_eq!(got[1][0], Some(Value::Str("R".into())));
@@ -138,9 +142,9 @@ fn zero_width_field_always_picks_symbol_zero() {
     );
     let sym = [0x04, b'k', b'o', b'n', b's', 0x00];
     let bytes = build_qvd(fields, extras, &sym, &[]);
-    let qvd = Qvd::from_bytes(bytes).expect("decode");
+    let qvd = parse(bytes).expect("decode");
     assert_eq!(qvd.num_rows(), 0);
-    assert_eq!(qvd.symbols(0).unwrap().len(), 1);
+    assert_eq!(qvd.fields()[0].no_of_symbols, 1);
 }
 
 /// `to_write_table` on a degenerate `RecordByteSize=0` header (every field
@@ -170,11 +174,11 @@ fn to_write_table_handles_zero_record_byte_size() {
         "  <Length>0</Length>\r\n",
     );
     let sym = [0x04, b'k', b'o', b'n', b's', 0x00];
-    let qvd = Qvd::from_bytes(build_qvd(fields, extras, &sym, &[])).expect("decode");
-    let table = qvd.to_write_table();
-    assert_eq!(table.columns.len(), 1);
-    assert_eq!(table.columns[0].cells.len(), 7);
-    assert!(table.columns[0]
+    let qvd = parse(build_qvd(fields, extras, &sym, &[])).expect("decode");
+    let table = qvd.to_write_table().unwrap();
+    assert_eq!(table.columns().len(), 1);
+    assert_eq!(table.columns()[0].cells.len(), 7);
+    assert!(table.columns()[0]
         .cells
         .iter()
         .all(|c| matches!(c, Some(Value::Str(s)) if s == "kons")));
@@ -226,8 +230,8 @@ fn all_five_symbol_types() {
         L = length,
     );
     let rows: [u8; 5] = [0, 1, 2, 3, 4];
-    let qvd = Qvd::from_bytes(build_qvd(&fields, &extras, &sym, &rows)).expect("decode");
-    let got: Vec<_> = qvd.rows().collect();
+    let qvd = parse(build_qvd(&fields, &extras, &sym, &rows)).expect("decode");
+    let got: Vec<_> = qvd.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(got[0][0], Some(Value::Int(-7)));
     assert_eq!(got[1][0], Some(Value::Float(1.5)));
     assert_eq!(got[2][0], Some(Value::Str("Z".into())));
@@ -261,7 +265,7 @@ fn unknown_type_byte_errors() {
     );
     let sym = [0x7F, 0x00]; // not a known type byte
     let bytes = build_qvd(fields, extras, &sym, &[0x00]);
-    let e = Qvd::from_bytes(bytes).unwrap_err();
+    let e = parse(bytes).unwrap_err();
     match e {
         openqvd::QvdError::UnknownSymbolType { byte, .. } => assert_eq!(byte, 0x7F),
         other => panic!("expected UnknownSymbolType, got {other:?}"),
@@ -303,10 +307,13 @@ fn overlapping_fields_rejected() {
     );
     let sym = [0x04, b'q', 0x00, 0x04, b'r', 0x00];
     let bytes = build_qvd(fields, extras, &sym, &[0x00]);
-    let e = Qvd::from_bytes(bytes).unwrap_err();
+    let e = parse(bytes).unwrap_err();
     match e {
-        openqvd::QvdError::Structure(msg) => assert!(msg.contains("overlaps"), "msg={msg}"),
-        other => panic!("expected Structure error, got {other:?}"),
+        openqvd::QvdError::FieldBitsOverlap { field, bit } => {
+            assert_eq!(field, "b");
+            assert_eq!(bit, 2);
+        }
+        other => panic!("expected FieldBitsOverlap, got {other:?}"),
     }
 }
 
@@ -334,8 +341,14 @@ fn inconsistent_length_rejected() {
     );
     let sym = [0x04, b'Z', 0x00];
     let bytes = build_qvd(fields, extras, &sym, &[0u8; 2]);
-    let e = Qvd::from_bytes(bytes).unwrap_err();
-    assert!(matches!(e, openqvd::QvdError::Structure(_)));
+    let e = parse(bytes).unwrap_err();
+    assert!(matches!(
+        e,
+        openqvd::QvdError::RowBlockLengthMismatch {
+            declared: 5,
+            expected: 2
+        }
+    ));
 }
 
 /// LF-only header terminator variant (observed in 4 corpus files) is
@@ -372,17 +385,15 @@ fn lf_terminator_accepted() {
     v.push(0x00);
     v.extend_from_slice(&[0x04, b'Z', 0x00]);
     v.push(0x00);
-    let q = Qvd::from_bytes(v).expect("decode lf");
+    let q = parse(v).expect("decode lf");
     assert_eq!(q.num_rows(), 1);
-    let r: Vec<_> = q.rows().collect();
+    let r: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(r[0][0], Some(Value::Str("Z".into())));
 }
 
 /// A hand-built record pointing at a symbol index that is out of range.
 #[test]
-fn checked_rows_errors_on_out_of_range_index() {
-    use openqvd::{Qvd, Value};
-
+fn rows_error_on_out_of_range_index() {
     // One field, 2 bits, 2 symbols (indices 0 and 1).
     // We'll craft a row whose stored value is 3 (out of range).
     let sym_int = |v: i32| -> Vec<u8> {
@@ -430,15 +441,22 @@ fn checked_rows_errors_on_out_of_range_index() {
     bytes.extend(&sym_block);
     bytes.extend(&row_block);
 
-    let q = Qvd::from_bytes(bytes).unwrap();
+    let q = parse(bytes).unwrap();
 
-    // Infallible rows() returns None.
-    let rows: Vec<_> = q.rows().collect();
-    assert_eq!(rows[0][0], None);
-
-    // checked_rows() returns Err.
-    let results: Vec<_> = q.checked_rows().collect();
-    assert!(results[0].is_err(), "expected Err for out-of-range index");
-    let msg = results[0].as_ref().unwrap_err().to_string();
-    assert!(msg.contains("out of range"), "message was: {msg}");
+    // rows() reports the corruption instead of turning it into a NULL.
+    let results: Vec<_> = q.rows().collect();
+    let err = results[0].as_ref().unwrap_err();
+    assert!(
+        matches!(
+            err,
+            openqvd::QvdError::SymbolIndexOutOfRange {
+                row: 0,
+                index: 3,
+                symbols: 2,
+                ..
+            }
+        ),
+        "error was: {err}"
+    );
+    assert_eq!(err.kind(), openqvd::ErrorKind::Structure);
 }

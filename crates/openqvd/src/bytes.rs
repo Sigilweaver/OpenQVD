@@ -11,9 +11,9 @@ fn slice_at<const N: usize>(
 ) -> Result<[u8; N], QvdError> {
     bytes
         .get(offset..offset + N)
-        .ok_or_else(|| QvdError::structure(format!("truncated {what} at byte {offset}")))?
+        .ok_or(QvdError::Truncated { what, offset })?
         .try_into()
-        .map_err(|_| QvdError::structure(format!("internal: slice_at length mismatch for {what}")))
+        .map_err(|_| QvdError::Truncated { what, offset })
 }
 
 #[inline]

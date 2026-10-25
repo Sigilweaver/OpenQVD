@@ -6,6 +6,54 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Breaking
+
+- `QvdError` is `#[non_exhaustive]` and every variant carries structured
+  context (`HeaderNotFound`, `InvalidHeaderValue { element, value, expected }`,
+  `RowBlockLengthMismatch`, `SymbolIndexOutOfRange`, `ColumnNotFound`, and so
+  on). The `BadHeader(String)`, `Xml(String)` and `Structure(String)` variants
+  are gone. `QvdError::kind()` returns a `#[non_exhaustive]` `ErrorKind`
+  (`Io`, `Header`, `Structure`, `Symbol`, `Schema`, `Conversion`,
+  `Unsupported`) for coarse handling.
+- `Qvd::open(path, &ReadOptions)` and `Qvd::parse(bytes, &ReadOptions)`
+  replace `from_path`, `from_path_projected`, `from_bytes` and
+  `from_bytes_projected`. `ReadOptions` holds the column projection and a
+  `Leniency`.
+- `Leniency` is one set of named `LenientCheck`s. The default is strict.
+  Anything a lenient read tolerates is returned by `Qvd::warnings()` as a
+  `Warning` with a `WarningKind`.
+- `Qvd::rows()` yields `Result<Vec<Cell>, QvdError>`; `checked_rows()` and
+  `CheckedRowIter` are removed. A symbol index outside the symbol table is an
+  error instead of a NULL.
+- `Qvd::to_write_table()` returns a `Result`. `Qvd::symbols()` and
+  `Qvd::header_size()` are no longer public.
+- `WriteTable` fields are private; use `name()` and `columns()`.
+  `record_batch_to_write_table` takes `&WriteOptions`.
+- `Value`, `Dual`, `NumberFormat`, `FieldHeader`, `TableHeader`, `Column`,
+  `Filter` and `ColumnFilter` are `#[non_exhaustive]`. Build them with
+  `Dual::new`, `NumberFormat::new(..).with_*`, `Column::new` and
+  `Filter::new`.
+- Python: every error derives from `openqvd.QvdError` (a `ValueError`), with
+  `QvdIOError` (also `OSError`; `QvdFileNotFoundError` and
+  `QvdPermissionError` are also `FileNotFoundError` and `PermissionError`),
+  `QvdFormatError` (`QvdHeaderError`, `QvdStructureError`, `QvdSymbolError`),
+  `QvdSchemaError`, `QvdConversionError` and `QvdUnsupportedError`. The class
+  is chosen from the Rust error kind, not from the message text; previously
+  an unknown symbol type surfaced as `RuntimeError`.
+- Python: `read`, `schema` and `write` take a keyword-only `leniency`
+  (`openqvd.Leniency` or an iterable of check names); `schema` is keyword-only
+  after `path`. `Schema.warnings` and `openqvd.QvdWarning` report what a
+  lenient read tolerated.
+
+### Behavior changes
+
+- Asking for a column that is not in the file now fails when the file is
+  opened, for every projection, not only when converting to Arrow.
+- Python `schema()` reads the header only and no longer decodes symbol
+  tables, so it does not fail on damaged symbol data.
+- The `validate_all` and `round_trip` examples decode every row, so index
+  corruption is no longer invisible to corpus runs.
+
 ### Changed
 
 - Python tests read the corpus location from `OPENQVD_CORPUS_DIR` instead of

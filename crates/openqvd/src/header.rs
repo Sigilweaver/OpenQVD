@@ -4,6 +4,7 @@ use crate::error::QvdError;
 /// same six sub-elements. Values are informational only: they do not
 /// change how bytes are decoded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NumberFormat {
     /// `Type` (e.g. `UNKNOWN`, `INTEGER`, `REAL`, `DATE`, `TIMESTAMP`).
     pub r#type: String,
@@ -19,8 +20,55 @@ pub struct NumberFormat {
     pub thou: String,
 }
 
+impl NumberFormat {
+    /// A format of the given `Type` (e.g. `"DATE"`) with every other
+    /// sub-element empty.
+    pub fn new(r#type: impl Into<String>) -> Self {
+        Self {
+            r#type: r#type.into(),
+            ..Self::default()
+        }
+    }
+
+    /// Set `nDec`.
+    #[must_use]
+    pub fn with_n_dec(mut self, n_dec: impl Into<String>) -> Self {
+        self.n_dec = n_dec.into();
+        self
+    }
+
+    /// Set `UseThou`.
+    #[must_use]
+    pub fn with_use_thou(mut self, use_thou: impl Into<String>) -> Self {
+        self.use_thou = use_thou.into();
+        self
+    }
+
+    /// Set `Fmt`.
+    #[must_use]
+    pub fn with_fmt(mut self, fmt: impl Into<String>) -> Self {
+        self.fmt = fmt.into();
+        self
+    }
+
+    /// Set `Dec`.
+    #[must_use]
+    pub fn with_dec(mut self, dec: impl Into<String>) -> Self {
+        self.dec = dec.into();
+        self
+    }
+
+    /// Set `Thou`.
+    #[must_use]
+    pub fn with_thou(mut self, thou: impl Into<String>) -> Self {
+        self.thou = thou.into();
+        self
+    }
+}
+
 /// Parsed representation of a `<QvdFieldHeader>` element.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FieldHeader {
     /// `FieldName` element (column name).
     pub name: String,
@@ -53,6 +101,7 @@ impl FieldHeader {
 
 /// Parsed representation of `<QvdTableHeader>` plus its fields.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TableHeader {
     /// `TableName`.
     pub table_name: String,
@@ -82,12 +131,11 @@ pub(crate) fn parse(full: &[u8]) -> Result<(TableHeader, usize), QvdError> {
     } else if let Some(p) = find_subslice(full, END_LF) {
         (p, END_LF.len())
     } else {
-        return Err(QvdError::bad_header("no QvdTableHeader terminator"));
+        return Err(QvdError::HeaderNotFound);
     };
 
     let xml_end = end_idx + b"</QvdTableHeader>".len();
-    let xml = std::str::from_utf8(&full[..xml_end])
-        .map_err(|_| QvdError::bad_header("header is not valid utf-8"))?;
+    let xml = std::str::from_utf8(&full[..xml_end]).map_err(|_| QvdError::HeaderNotUtf8)?;
     let header_bytes_total = end_idx + term_len;
 
     let parsed = parse_xml(xml)?;
@@ -123,7 +171,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
     let mut in_tags = false;
 
     loop {
-        match r.read_event().map_err(|e| QvdError::Xml(e.to_string()))? {
+        match r.read_event().map_err(QvdError::xml)? {
             Event::Start(e) => {
                 let name = e.name().as_ref().to_owned();
                 if name == "QvdFieldHeader" {
@@ -161,20 +209,24 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                     ("QvdTableHeader", "QvBuildNo") => {
                         build_no = Some(txt).filter(|s| !s.is_empty())
                     }
-                    ("QvdTableHeader", "RecordByteSize") => record_byte_size = parse_u32(&txt)?,
-                    ("QvdTableHeader", "NoOfRecords") => no_of_records = parse_u32(&txt)?,
-                    ("QvdTableHeader", "Offset") => row_block_offset = parse_u32(&txt)?,
-                    ("QvdTableHeader", "Length") => row_block_length = parse_u32(&txt)?,
+                    ("QvdTableHeader", "RecordByteSize") => {
+                        record_byte_size = parse_u32("RecordByteSize", &txt)?
+                    }
+                    ("QvdTableHeader", "NoOfRecords") => {
+                        no_of_records = parse_u32("NoOfRecords", &txt)?
+                    }
+                    ("QvdTableHeader", "Offset") => row_block_offset = parse_u32("Offset", &txt)?,
+                    ("QvdTableHeader", "Length") => row_block_length = parse_u32("Length", &txt)?,
                     ("QvdFieldHeader", field) => {
                         if let Some(f) = current.as_mut() {
                             match field {
                                 "FieldName" => f.name = txt,
-                                "BitOffset" => f.bit_offset = parse_u32(&txt)?,
-                                "BitWidth" => f.bit_width = parse_u32(&txt)?,
-                                "Bias" => f.bias = parse_i32(&txt)?,
-                                "NoOfSymbols" => f.no_of_symbols = parse_u32(&txt)?,
-                                "Offset" => f.offset = parse_u32(&txt)?,
-                                "Length" => f.length = parse_u32(&txt)?,
+                                "BitOffset" => f.bit_offset = parse_u32("BitOffset", &txt)?,
+                                "BitWidth" => f.bit_width = parse_u32("BitWidth", &txt)?,
+                                "Bias" => f.bias = parse_i32("Bias", &txt)?,
+                                "NoOfSymbols" => f.no_of_symbols = parse_u32("NoOfSymbols", &txt)?,
+                                "Offset" => f.offset = parse_u32("Offset", &txt)?,
+                                "Length" => f.length = parse_u32("Length", &txt)?,
                                 _ => {}
                             }
                         }
@@ -218,7 +270,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                 // quick-xml 0.42 reads from `&str`, so the text is already
                 // UTF-8 and only entity unescaping can fail.
                 let s = quick_xml::escape::unescape(&t)
-                    .map_err(|e| QvdError::Xml(e.to_string()))?
+                    .map_err(QvdError::xml)?
                     .into_owned();
                 text_buf.push_str(&s);
             }
@@ -236,7 +288,7 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
     let _ = in_tags;
 
     if table_name.is_empty() && fields.is_empty() {
-        return Err(QvdError::bad_header("no TableName and no fields found"));
+        return Err(QvdError::HeaderEmpty);
     }
     Ok(TableHeader {
         table_name,
@@ -249,14 +301,22 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
     })
 }
 
-fn parse_u32(s: &str) -> Result<u32, QvdError> {
+fn parse_u32(element: &str, s: &str) -> Result<u32, QvdError> {
     s.trim()
         .parse::<u32>()
-        .map_err(|e| QvdError::bad_header(format!("expected u32, got {s:?}: {e}")))
+        .map_err(|_| QvdError::InvalidHeaderValue {
+            element: element.to_owned(),
+            value: s.to_owned(),
+            expected: "u32",
+        })
 }
 
-fn parse_i32(s: &str) -> Result<i32, QvdError> {
+fn parse_i32(element: &str, s: &str) -> Result<i32, QvdError> {
     s.trim()
         .parse::<i32>()
-        .map_err(|e| QvdError::bad_header(format!("expected i32, got {s:?}: {e}")))
+        .map_err(|_| QvdError::InvalidHeaderValue {
+            element: element.to_owned(),
+            value: s.to_owned(),
+            expected: "i32",
+        })
 }

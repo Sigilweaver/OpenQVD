@@ -5,7 +5,7 @@ use std::env;
 use std::path::Path;
 use std::process::ExitCode;
 
-use openqvd::Qvd;
+use openqvd::{Qvd, ReadOptions};
 
 fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -53,8 +53,16 @@ fn main() -> ExitCode {
             continue;
         }
 
-        match Qvd::from_path(p) {
-            Ok(_) => ok += 1,
+        // Open, then decode every row: a corrupt symbol index only shows up
+        // when the rows are read.
+        let res = Qvd::open(p, &ReadOptions::default()).and_then(|q| {
+            for row in q.rows() {
+                row?;
+            }
+            Ok(())
+        });
+        match res {
+            Ok(()) => ok += 1,
             Err(e) => {
                 fail += 1;
                 if first_fails.len() < 20 {

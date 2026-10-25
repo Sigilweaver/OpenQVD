@@ -14,7 +14,7 @@
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use openqvd::{Qvd, Value};
+use openqvd::{Qvd, ReadOptions, Value};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -58,9 +58,29 @@ Usage:
   openqvd rewrite <in> <out>
 ";
 
+/// Open a file strictly, rendering the error with its source chain.
+fn open_qvd(path: &str) -> Result<Qvd, String> {
+    Qvd::open(path, &ReadOptions::default()).map_err(|e| chain(&e))
+}
+
+/// Render an error followed by each of its sources, `: `-separated.
+fn chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        let text = s.to_string();
+        if !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        src = s.source();
+    }
+    out
+}
+
 fn cmd_stat(args: &[String]) -> Result<(), String> {
     let path = args.first().ok_or("stat: missing file")?;
-    let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
+    let q = open_qvd(path)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     writeln!(out, "table: {}", q.table_name()).map_err(|e| e.to_string())?;
     writeln!(out, "rows:  {}", q.num_rows()).map_err(|e| e.to_string())?;
@@ -112,10 +132,11 @@ fn cmd_head(args: &[String]) -> Result<(), String> {
             return Err(format!("head: unknown argument {:?}", args[i]));
         }
     }
-    let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
+    let q = open_qvd(path)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     print_header_row(&mut out, &q)?;
     for row in q.rows().take(n_rows) {
+        let row = row.map_err(|e| chain(&e))?;
         print_value_row(&mut out, &row)?;
     }
     Ok(())
@@ -123,10 +144,11 @@ fn cmd_head(args: &[String]) -> Result<(), String> {
 
 fn cmd_csv(args: &[String]) -> Result<(), String> {
     let path = args.first().ok_or("csv: missing file")?;
-    let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
+    let q = open_qvd(path)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     print_header_row(&mut out, &q)?;
     for row in q.rows() {
+        let row = row.map_err(|e| chain(&e))?;
         print_value_row(&mut out, &row)?;
     }
     Ok(())
@@ -134,10 +156,11 @@ fn cmd_csv(args: &[String]) -> Result<(), String> {
 
 fn cmd_json(args: &[String]) -> Result<(), String> {
     let path = args.first().ok_or("json: missing file")?;
-    let q = Qvd::from_path(path).map_err(|e| e.to_string())?;
+    let q = open_qvd(path)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     let names: Vec<&str> = q.fields().iter().map(|f| f.name.as_str()).collect();
     for row in q.rows() {
+        let row = row.map_err(|e| chain(&e))?;
         let mut first = true;
         write!(out, "{{").map_err(|e| e.to_string())?;
         for (name, cell) in names.iter().zip(&row) {
@@ -158,8 +181,8 @@ fn cmd_json(args: &[String]) -> Result<(), String> {
 fn cmd_rewrite(args: &[String]) -> Result<(), String> {
     let src = args.first().ok_or("rewrite: missing <in>")?;
     let dst = args.get(1).ok_or("rewrite: missing <out>")?;
-    let q = Qvd::from_path(src).map_err(|e| e.to_string())?;
-    q.write_to_path(dst).map_err(|e| e.to_string())?;
+    let q = open_qvd(src)?;
+    q.write_to_path(dst).map_err(|e| chain(&e))?;
     eprintln!("wrote {}", dst);
     Ok(())
 }
@@ -197,6 +220,7 @@ fn print_value_row<W: Write>(out: &mut W, row: &[Option<Value>]) -> Result<(), S
             Some(Value::DualFloat(d)) => {
                 write!(out, "{}", d.text.replace(['\t', '\n'], " ")).map_err(|e| e.to_string())?
             }
+            Some(other) => return Err(format!("unsupported value type: {other:?}")),
         }
     }
     writeln!(out).map_err(|e| e.to_string())?;
@@ -229,6 +253,7 @@ fn write_json_value<W: Write>(out: &mut W, cell: &Option<Value>) -> Result<(), S
                 write!(out, "\"").map_err(|e| e.to_string())?;
             }
         }
+        Some(other) => return Err(format!("unsupported value type: {other:?}")),
     }
     Ok(())
 }

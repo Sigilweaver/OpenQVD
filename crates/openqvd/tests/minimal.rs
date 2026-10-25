@@ -1,5 +1,9 @@
 use openqvd::{Qvd, Value};
 
+fn parse(bytes: Vec<u8>) -> Result<Qvd, openqvd::QvdError> {
+    Qvd::parse(bytes, &openqvd::ReadOptions::default())
+}
+
 // Hand-authored minimal QVD: single field "C" with 2 string symbols "A", "B"
 // and 2 rows referencing them. This exercises header parse, symbol decode,
 // bit extraction, and bias-free lookup end to end. Built from spec alone.
@@ -40,11 +44,11 @@ fn minimal_file() -> Vec<u8> {
 
 #[test]
 fn reads_minimal_file() {
-    let qvd = Qvd::from_bytes(minimal_file()).expect("decode");
+    let qvd = parse(minimal_file()).expect("decode");
     assert_eq!(qvd.table_name(), "T");
     assert_eq!(qvd.num_rows(), 2);
     assert_eq!(qvd.fields().len(), 1);
-    let rows: Vec<_> = qvd.rows().collect();
+    let rows: Vec<_> = qvd.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(rows.len(), 2);
     match &rows[0][0] {
         Some(Value::Str(s)) => assert_eq!(s, "A"),
@@ -59,5 +63,5 @@ fn reads_minimal_file() {
 #[test]
 fn rejects_missing_terminator() {
     let bad = b"<?xml version=\"1.0\"?><QvdTableHeader></QvdTableHeader>".to_vec();
-    assert!(Qvd::from_bytes(bad).is_err());
+    assert!(parse(bad).is_err());
 }

@@ -6,7 +6,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use openqvd::{Qvd, Value};
+use openqvd::{Qvd, ReadOptions, Value};
 
 fn main() -> ExitCode {
     let args: Vec<PathBuf> = env::args_os().skip(1).map(Into::into).collect();
@@ -17,7 +17,7 @@ fn main() -> ExitCode {
     let mut ok = 0usize;
     let mut fail = 0usize;
     for path in args {
-        match Qvd::from_path(&path) {
+        match Qvd::open(&path, &ReadOptions::default()) {
             Ok(qvd) => {
                 ok += 1;
                 println!(
@@ -40,6 +40,14 @@ fn main() -> ExitCode {
                 }
                 for (ri, row) in qvd.rows().take(3).enumerate() {
                     print!("    row {ri}:");
+                    let row = match row {
+                        Ok(r) => r,
+                        Err(e) => {
+                            println!(" ERROR {e}");
+                            fail += 1;
+                            break;
+                        }
+                    };
                     for cell in &row {
                         match cell {
                             None => print!(" NULL"),
@@ -48,6 +56,7 @@ fn main() -> ExitCode {
                             Some(Value::Str(s)) => print!(" str({s:?})"),
                             Some(Value::DualInt(d)) => print!(" di({},{:?})", d.number, d.text),
                             Some(Value::DualFloat(d)) => print!(" df({},{:?})", d.number, d.text),
+                            Some(other) => print!(" {other:?}"),
                         }
                     }
                     println!();

@@ -12,6 +12,7 @@ use crate::value::{Cell, Value};
 
 /// A single column of logical values, ready to be written.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Column {
     /// Column name (becomes `<FieldName>`).
     pub name: String,
@@ -42,12 +43,14 @@ impl Column {
 }
 
 /// A logical table ready to be encoded.
+///
+/// Fields are private so the equal-length invariant checked by
+/// [`WriteTable::new`] cannot be broken afterwards; read them through
+/// [`Self::name`] and [`Self::columns`].
 #[derive(Debug, Clone)]
 pub struct WriteTable {
-    /// `<TableName>`.
-    pub name: String,
-    /// Columns in declaration order.
-    pub columns: Vec<Column>,
+    name: String,
+    columns: Vec<Column>,
 }
 
 impl WriteTable {
@@ -57,12 +60,11 @@ impl WriteTable {
             let n = first.cells.len();
             for c in &columns {
                 if c.cells.len() != n {
-                    return Err(QvdError::structure(format!(
-                        "column {:?} has {} cells, expected {}",
-                        c.name,
-                        c.cells.len(),
-                        n
-                    )));
+                    return Err(QvdError::ColumnLengthMismatch {
+                        column: c.name.clone(),
+                        found: c.cells.len(),
+                        expected: n,
+                    });
                 }
             }
         }
@@ -70,6 +72,16 @@ impl WriteTable {
             name: name.into(),
             columns,
         })
+    }
+
+    /// `<TableName>`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Columns in declaration order.
+    pub fn columns(&self) -> &[Column] {
+        &self.columns
     }
 
     /// Number of rows (0 if no columns).
@@ -152,9 +164,9 @@ fn plan_column(col: &Column) -> Result<ColumnPlan, QvdError> {
         while ((1u64 << w) - 1) < max_stored {
             w += 1;
             if w > 64 {
-                return Err(QvdError::structure(
-                    "column cardinality exceeds 64-bit bit width",
-                ));
+                return Err(QvdError::CardinalityTooLarge {
+                    column: col.name.clone(),
+                });
             }
         }
         w
@@ -237,9 +249,7 @@ fn encode_symbols(symbols: &[Value]) -> Result<Vec<u8>, QvdError> {
 
 fn write_cstring(out: &mut Vec<u8>, s: &str) -> Result<(), QvdError> {
     if s.as_bytes().contains(&0x00) {
-        return Err(QvdError::structure(
-            "string symbol contains NUL byte, which is reserved as the symbol terminator",
-        ));
+        return Err(QvdError::NulInString);
     }
     out.extend_from_slice(s.as_bytes());
     out.push(0x00);
@@ -260,7 +270,9 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
         p.bit_offset = bit_cursor;
         bit_cursor = bit_cursor
             .checked_add(p.bit_width)
-            .ok_or_else(|| QvdError::structure("bit layout overflow"))?;
+            .ok_or(QvdError::LayoutOverflow {
+                what: "record bit layout",
+            })?;
     }
     let record_bits = bit_cursor;
     let record_byte_size = record_bits.div_ceil(8);
@@ -269,15 +281,21 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
     let mut body_cursor: u32 = 0;
     for p in plans.iter_mut() {
         p.offset_in_body = body_cursor;
-        body_cursor = body_cursor
-            .checked_add(p.length_in_body)
-            .ok_or_else(|| QvdError::structure("body layout overflow"))?;
+        body_cursor =
+            body_cursor
+                .checked_add(p.length_in_body)
+                .ok_or(QvdError::LayoutOverflow {
+                    what: "symbol block layout",
+                })?;
     }
     let row_block_offset = body_cursor;
     let n_rows = table.num_rows() as u32;
-    let row_block_length = record_byte_size
-        .checked_mul(n_rows)
-        .ok_or_else(|| QvdError::structure("row block size overflow"))?;
+    let row_block_length =
+        record_byte_size
+            .checked_mul(n_rows)
+            .ok_or(QvdError::LayoutOverflow {
+                what: "row block size",
+            })?;
 
     // 4. Build the XML header.
     let xml = build_xml_header(
