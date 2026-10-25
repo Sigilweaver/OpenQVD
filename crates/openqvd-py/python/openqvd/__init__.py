@@ -246,4 +246,4 @@ def write(
     >>> t = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
     >>> openqvd.write(t, "out.qvd")
     """
-    _write(data, str(path), table_name, _check_names(leniency))
+    _emit_warnings(_write(data, str(path), table_name, _check_names(leniency)))

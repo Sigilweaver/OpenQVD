@@ -37,6 +37,7 @@ mod filter;
 mod header;
 mod options;
 mod reader;
+pub mod serial;
 mod symbols;
 mod value;
 mod warning;

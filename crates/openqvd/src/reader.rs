@@ -61,6 +61,18 @@ impl Qvd {
         let body: Vec<u8> = bytes.split_off(header_bytes);
         let header_raw = bytes;
 
+        {
+            // Lookups go by name, so a repeated name would silently pick the
+            // first column and hide the other.
+            let mut seen = std::collections::HashSet::new();
+            for f in &header.fields {
+                if !seen.insert(f.name.as_str()) {
+                    return Err(QvdError::DuplicateColumn {
+                        name: f.name.clone(),
+                    });
+                }
+            }
+        }
         if let Some(names) = &options.columns {
             for n in names {
                 if !header.fields.iter().any(|f| f.name == *n) {

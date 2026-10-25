@@ -57,8 +57,17 @@ fn leniency_is_a_set_of_named_checks() {
     let l = Leniency::strict().with(LenientCheck::NonNumericTemporal);
     assert!(!l.is_strict());
     assert!(l.allows(LenientCheck::NonNumericTemporal));
-    assert_eq!(l, Leniency::lenient());
-    assert_eq!(l.checks().collect::<Vec<_>>(), LenientCheck::ALL);
+    assert_ne!(l, Leniency::lenient());
+    assert!(!l.allows(LenientCheck::TimezoneToUtc));
+    let all = LenientCheck::ALL
+        .iter()
+        .fold(Leniency::strict(), |l, c| l.with(*c));
+    assert_eq!(all, Leniency::lenient());
+    let mut listed: Vec<_> = Leniency::lenient().checks().collect();
+    listed.sort();
+    let mut expected = LenientCheck::ALL.to_vec();
+    expected.sort();
+    assert_eq!(listed, expected);
     for c in LenientCheck::ALL {
         assert_eq!(c.as_str().parse::<LenientCheck>().unwrap(), *c);
     }

@@ -74,6 +74,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Writing Arrow data fell back to text for any type without a mapping, then
+  labelled the column DATE, TIMESTAMP or TIME anyway, so `datetime64[ns]`,
+  `TIME` and durations came back as 1899-12-30 or zero. Every accepted type now
+  has an explicit, exact mapping (see `record_batches_to_write_table`); any
+  other type is `UnsupportedArrowType` (S1-3).
+- UInt32 values above 2^31 wrapped to negative numbers, Int64 values outside 32
+  bits were written as text, and Decimal columns became text (so Qlik's Sum()
+  skipped them). These are now numbers with their exact decimal text; magnitudes
+  above 2^53 and decimals that a float cannot hold are `ValueNotRepresentable`
+  (S1-5).
+- An Arrow timestamp with a time zone was written as UTC wall-clock time with no
+  indication. It is `TimezoneNotSupported`; the `timezone_to_utc` lenient check
+  writes UTC and returns a warning (S1-12).
+- The row count, symbol-table size and distinct-value count were cast to `u32`
+  unchecked, wrapping for very large tables. They are `LayoutOverflow` errors
+  (S1-13).
+- Nanosecond (and Time64/Duration nanosecond) values were rounded to the
+  microsecond without notice, merging distinct values. A remainder is now
+  `ValueNotRepresentable`; the `sub_microsecond_precision` lenient check rounds
+  and warns once per column.
+- `Date32`/`Date64` arithmetic overflowed `i32`, and a `Timestamp` near the
+  `i64` limits could produce a file the strict reader rejects. Dates and
+  timestamps are limited to years 0001 to 9999 and checked against the
+  reader's own conversion, so whatever the writer accepts re-reads strictly.
+- Duplicate column names were accepted, so a name lookup silently returned the
+  first column. `WriteTable::new` and opening a file reject them
+  (`DuplicateColumn`).
+- Arrow Duration columns carry the `INTERVAL` format (a TIME column is a time of
+  day and a TIME value of a day or more reads as a timestamp).
+- Timestamp serials are computed with a single rounding, so a whole-second
+  timestamp survives write and read exactly.
 - TIMESTAMP and TIME values were truncated toward zero when converted to
   microseconds, so about 30% of whole-second timestamps came back one
   microsecond early. They are rounded to the nearest microsecond. A value that
@@ -153,6 +184,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `view_name` without `con` is a `ValueError`.
 
 ### Behavior changes
+
+- `openqvd.write` and `record_batches_to_write_table` reject Arrow types that
+  have no mapping (binary, lists, structs, intervals, Float16, ...) and
+  timestamps with a time zone, instead of writing text. Decimals and 64-bit
+  integers are written as numbers. Python: `write` also returns nothing but
+  emits `QvdWarning` for what a lenient write tolerated.
+- `WriteTable::warnings()` lists what a lenient conversion tolerated.
 
 - 6 corpus files (Qlik course data) have a DATE column with one empty-string
   symbol; they now fail with `NonNumericTemporal` unless the
