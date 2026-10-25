@@ -113,11 +113,11 @@ __all__ = [
 
 
 def schema(path: Union[str, Path], *, leniency: LeniencyLike = None) -> Schema:
-    """Read a QVD file's metadata without decoding symbol tables.
+    """Read a QVD file's metadata, including each column's resolved type.
 
-    The header and the row block are still validated (one pass over the
-    rows), so a structurally damaged file raises here, but no values are
-    decoded.
+    The symbol tables are decoded (the type of a column depends on its
+    values) and the row block is validated, so a damaged file raises here
+    exactly as :func:`read` would, but no table is built.
 
     Parameters
     ----------
@@ -130,7 +130,12 @@ def schema(path: Union[str, Path], *, leniency: LeniencyLike = None) -> Schema:
     Returns
     -------
     Schema
-        ``.table_name``, ``.num_rows``, ``.fields`` and ``.warnings``.
+        ``.table_name``, ``.num_rows``, ``.fields`` and ``.warnings``. Each
+        field has ``.dtype``: ``int64``, ``float64``, ``utf8``, ``null``,
+        ``date32``, ``timestamp_us`` or ``duration_us``. A DATE column is
+        ``timestamp_us`` instead of ``date32`` when any value has a time of
+        day, and a TIME column is ``timestamp_us`` when any value has a
+        date, so the type can differ between two extracts of one table.
 
     Raises
     ------

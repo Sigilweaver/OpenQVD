@@ -208,6 +208,11 @@ struct PyFieldInfo {
     bit_width: u32,
     #[pyo3(get)]
     bias: i32,
+    /// Logical type the column decodes to, e.g. ``"timestamp_us"``. A DATE
+    /// column is ``"date32"`` or, if any value has a time of day,
+    /// ``"timestamp_us"``.
+    #[pyo3(get)]
+    dtype: String,
 }
 
 #[pymethods]
@@ -502,8 +507,8 @@ fn read(
     ))
 }
 
-/// Read only the schema/metadata of a QVD file without decoding symbol
-/// tables or row data.
+/// Read the schema/metadata of a QVD file: header, symbol tables (to resolve
+/// each column's type) and a validation pass over the rows, but no values.
 ///
 /// Parameters
 /// ----------
@@ -520,22 +525,24 @@ fn read(
 #[pyfunction]
 #[pyo3(signature = (path, leniency=None))]
 fn schema(path: &str, leniency: Option<Vec<String>>) -> PyResult<PyQvdSchema> {
-    let options = openqvd::ReadOptions::default()
-        .with_columns(Vec::<String>::new())
-        .with_leniency(parse_leniency(leniency)?);
+    let options = openqvd::ReadOptions::default().with_leniency(parse_leniency(leniency)?);
     let qvd = openqvd::Qvd::open(path, &options).map_err(to_py)?;
     let fields: Vec<PyFieldInfo> = qvd
         .fields()
         .iter()
-        .map(|f| PyFieldInfo {
-            name: f.name.clone(),
-            number_format_type: f.number_format.r#type.clone(),
-            n_symbols: f.no_of_symbols,
-            tags: f.tags.clone(),
-            bit_width: f.bit_width,
-            bias: f.bias,
+        .enumerate()
+        .map(|(i, f)| {
+            Ok(PyFieldInfo {
+                name: f.name.clone(),
+                number_format_type: f.number_format.r#type.clone(),
+                n_symbols: f.no_of_symbols,
+                tags: f.tags.clone(),
+                bit_width: f.bit_width,
+                bias: f.bias,
+                dtype: qvd.column_type(i).map_err(to_py)?.as_str().to_owned(),
+            })
         })
-        .collect();
+        .collect::<PyResult<_>>()?;
     Ok(PyQvdSchema {
         table_name: qvd.table_name().to_string(),
         num_rows: qvd.num_rows(),

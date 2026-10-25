@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::column::{resolve_type, ColumnType};
 use crate::error::QvdError;
 use crate::header::{parse, FieldHeader, TableHeader};
 use crate::options::ReadOptions;
@@ -37,6 +38,8 @@ pub struct Qvd {
     /// Whether each field's symbol table was decoded (false for fields
     /// outside `ReadOptions::columns`).
     decoded: Vec<bool>,
+    /// Logical type of each decoded field, resolved when the file opened.
+    types: Vec<Option<ColumnType>>,
     /// Deviations tolerated because `ReadOptions::leniency` allowed them.
     warnings: Vec<Warning>,
 }
@@ -65,7 +68,7 @@ impl Qvd {
                 }
             }
         }
-        let warnings: Vec<Warning> = Vec::new();
+        let mut warnings: Vec<Warning> = Vec::new();
 
         // Structural invariants required by the spec.
         let expected_len = header
@@ -197,12 +200,27 @@ impl Qvd {
             }
         }
 
+        let mut types = Vec::with_capacity(header.fields.len());
+        for (i, f) in header.fields.iter().enumerate() {
+            types.push(if decoded[i] {
+                Some(resolve_type(
+                    f,
+                    &symbol_tables[i],
+                    &options.leniency,
+                    &mut warnings,
+                )?)
+            } else {
+                None
+            });
+        }
+
         let qvd = Self {
             header,
             header_raw,
             body,
             symbol_tables,
             decoded,
+            types,
             warnings,
         };
         qvd.validate_rows(&spans)?;
@@ -283,6 +301,20 @@ impl Qvd {
     /// outside `ReadOptions::columns`).
     pub fn is_decoded(&self, index: usize) -> bool {
         self.decoded.get(index).copied().unwrap_or(false)
+    }
+
+    /// The logical type column `index` decodes to. Errors if the column was
+    /// left out of `ReadOptions::columns`.
+    pub fn column_type(&self, index: usize) -> Result<ColumnType, QvdError> {
+        match self.types.get(index) {
+            Some(Some(t)) => Ok(*t),
+            Some(None) => Err(QvdError::FieldNotDecoded {
+                field: self.header.fields[index].name.clone(),
+            }),
+            None => Err(QvdError::ColumnNotFound {
+                name: format!("#{index}"),
+            }),
+        }
     }
 
     /// Decoded symbol table for the given field index.
