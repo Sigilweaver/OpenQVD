@@ -89,6 +89,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A body containing a CRLF-style header terminator could split an LF-terminated
   header at the wrong place. The earliest terminator wins, and the root
   element must be `QvdTableHeader` (S3-3).
+- `NumberFormat/Type` selects the date/time conversion but a missing or
+  duplicated `<Type>` was accepted (the column read as plain numbers). It is
+  required exactly once per field.
 - `Qvd::to_bytes` and `openqvd rewrite`: `to_bytes` returns the original header
   bytes followed by the body, so build number, creator, lineage, per-field
   comments and unknown elements survive (S2-5). `openqvd rewrite` and the
