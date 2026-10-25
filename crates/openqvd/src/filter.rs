@@ -7,16 +7,51 @@ use crate::error::QvdError;
 use crate::reader::{Qvd, NULL_INDEX};
 use crate::value::Value;
 
+/// A value a filter compares against. Numbers compare numerically with
+/// numeric symbols (so `Float(1.0)` matches the integer 1), text compares
+/// with string symbols and with the text of dual symbols.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum FilterValue {
+    /// Text.
+    Str(String),
+    /// An integer.
+    Int(i64),
+    /// A float. NaN matches NaN symbols.
+    Float(f64),
+}
+
+impl From<&str> for FilterValue {
+    fn from(s: &str) -> Self {
+        FilterValue::Str(s.to_owned())
+    }
+}
+impl From<String> for FilterValue {
+    fn from(s: String) -> Self {
+        FilterValue::Str(s)
+    }
+}
+impl From<i64> for FilterValue {
+    fn from(i: i64) -> Self {
+        FilterValue::Int(i)
+    }
+}
+impl From<f64> for FilterValue {
+    fn from(f: f64) -> Self {
+        FilterValue::Float(f)
+    }
+}
+
 /// A predicate on one column.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ColumnFilter {
-    /// Keep rows where the column value equals this string exactly.
-    Eq(String),
-    /// Keep rows where the column value is one of these strings.
-    IsIn(Vec<String>),
-    /// Keep rows where the column value is NOT one of these strings.
-    NotIn(Vec<String>),
+    /// Keep rows where the column value equals this value.
+    Eq(FilterValue),
+    /// Keep rows where the column value is one of these values.
+    IsIn(Vec<FilterValue>),
+    /// Keep rows where the column value is NOT one of these values.
+    NotIn(Vec<FilterValue>),
     /// Keep rows where the column is NULL.
     IsNull,
     /// Keep rows where the column is NOT NULL.
@@ -45,12 +80,11 @@ impl Filter {
 
 /// Symbol indices that satisfy `pred`, and whether NULL rows pass.
 fn resolve(symbols: &[Value], pred: &ColumnFilter) -> (HashSet<usize>, bool) {
-    let matching = |targets: &[String]| -> HashSet<usize> {
-        let t: HashSet<&str> = targets.iter().map(|s| s.as_str()).collect();
+    let matching = |targets: &[FilterValue]| -> HashSet<usize> {
         symbols
             .iter()
             .enumerate()
-            .filter(|(_, s)| t.iter().any(|x| symbol_matches_str(s, x)))
+            .filter(|(_, s)| targets.iter().any(|t| symbol_matches(s, t)))
             .map(|(i, _)| i)
             .collect()
     };
@@ -70,13 +104,42 @@ fn resolve(symbols: &[Value], pred: &ColumnFilter) -> (HashSet<usize>, bool) {
     }
 }
 
-fn symbol_matches_str(sym: &Value, target: &str) -> bool {
+fn number_of(sym: &Value) -> Option<f64> {
     match sym {
-        Value::Str(s) => s == target,
-        Value::Int(i) => i.to_string() == target,
-        Value::Float(f) => f.to_string() == target,
-        Value::DualInt(d) => d.text == target || d.number.to_string() == target,
-        Value::DualFloat(d) => d.text == target || d.number.to_string() == target,
+        Value::Int(i) => Some(f64::from(*i)),
+        Value::Float(f) => Some(*f),
+        Value::DualInt(d) => Some(f64::from(d.number)),
+        Value::DualFloat(d) => Some(d.number),
+        _ => None,
+    }
+}
+
+fn text_of(sym: &Value) -> Option<&str> {
+    match sym {
+        Value::Str(s) => Some(s),
+        Value::DualInt(d) => Some(&d.text),
+        Value::DualFloat(d) => Some(&d.text),
+        _ => None,
+    }
+}
+
+fn symbol_matches(sym: &Value, target: &FilterValue) -> bool {
+    match target {
+        FilterValue::Str(t) => text_of(sym) == Some(t.as_str()),
+        FilterValue::Int(t) => match sym {
+            // Exact for integers; floats compare only if the integer is
+            // exactly representable.
+            Value::Int(i) => i64::from(*i) == *t,
+            Value::DualInt(d) => i64::from(d.number) == *t,
+            _ => number_of(sym).is_some_and(|n| {
+                // 2^63 is not an i64; `as` would saturate it onto i64::MAX.
+                const TWO_63: f64 = 9_223_372_036_854_775_808.0;
+                n.fract() == 0.0 && (-TWO_63..TWO_63).contains(&n) && n as i64 == *t
+            }),
+        },
+        FilterValue::Float(t) => {
+            number_of(sym).is_some_and(|n| n == *t || (n.is_nan() && t.is_nan()))
+        }
     }
 }
 

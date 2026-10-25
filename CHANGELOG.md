@@ -74,6 +74,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Filters compared a number with the Rust text of a symbol: `{"op": "eq",
+  "value": 1.0}` on a column holding 1.0 sent "1.0", Rust rendered "1", and the
+  query returned no rows without an error; 1e20 and `True` failed the same way.
+  Filter values are now typed (`FilterValue::{Str, Int, Float}`; Python `int`,
+  `float`, `str`). Numbers compare numerically, text compares with string
+  symbols and the text of duals, NaN matches NaN. `bool` and other Python
+  types raise `TypeError` (S2-3). The undocumented `"=="` and `"in"` ops are
+  removed.
+- The CLI dropped the final flush error, so `openqvd csv f > /dev/full` exited 0
+  with truncated output. Every command flushes and a failure exits non-zero (a
+  closed pipe is not a failure).
+- `--allow <check>` (repeatable) and `--lenient` on `stat`, `head`, `csv`,
+  `json` and `rewrite` use the lenient checks named in error messages and print
+  each warning to stderr.
+- An `int` filter no longer matches the float 2^63 (the conversion saturated);
+  Python filter dicts reject unknown keys and a `value` on `is_null` /
+  `is_not_null` instead of ignoring them.
+- `openqvd json` printed a NaN or infinite plain float as `null`, identical to a
+  real NULL. It prints the string `"NaN"`, `"inf"` or `"-inf"`, as it already did
+  for dual floats (S2-7).
 - Writing Arrow data fell back to text for any type without a mapping, then
   labelled the column DATE, TIMESTAMP or TIME anyway, so `datetime64[ns]`,
   `TIME` and durations came back as 1899-12-30 or zero. Every accepted type now
@@ -184,6 +204,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `view_name` without `con` is a `ValueError`.
 
 ### Behavior changes
+
+- A string filter value no longer matches a numeric symbol by its printed form
+  (`"1"` does not match the integer 1); pass the number.
 
 - `openqvd.write` and `record_batches_to_write_table` reject Arrow types that
   have no mapping (binary, lists, structs, intervals, Float16, ...) and

@@ -101,7 +101,7 @@ macro_rules! suite {
                 .unwrap();
                 let q = Qvd::parse(t.to_bytes().unwrap(), &ReadOptions::default()).unwrap();
                 let opts = BatchOptions::new()
-                    .with_filters(vec![Filter::new("k", ColumnFilter::Eq("1".into()))]);
+                    .with_filters(vec![Filter::new("k", ColumnFilter::Eq(1i64.into()))]);
                 let b = $module::to_record_batch(&q, &opts).unwrap();
                 assert_eq!(b.num_rows(), 2);
                 assert_eq!(b.column(0).len(), 2);

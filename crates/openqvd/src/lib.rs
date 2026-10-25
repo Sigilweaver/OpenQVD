@@ -47,7 +47,7 @@ pub(crate) mod bytes;
 
 pub use column::{ColumnData, ColumnType, ColumnValues};
 pub use error::{ErrorKind, QvdError};
-pub use filter::{ColumnFilter, Filter};
+pub use filter::{ColumnFilter, Filter, FilterValue};
 pub use header::{FieldHeader, NumberFormat, TableHeader};
 pub use options::{Leniency, LenientCheck, ReadOptions, UnknownCheck, WriteOptions};
 pub use reader::Qvd;

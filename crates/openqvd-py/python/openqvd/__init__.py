@@ -175,8 +175,11 @@ def read(
         - ``"column"``: column name (str)
         - ``"op"``: one of ``"eq"``, ``"is_in"``, ``"not_in"``,
           ``"is_null"``, ``"is_not_null"``
-        - ``"value"``: str for ``"eq"``, list[str] for ``"is_in"``/
-          ``"not_in"``, omitted for null checks.
+        - ``"value"``: ``int``, ``float`` or ``str`` for ``"eq"``, a list of
+          those for ``"is_in"``/``"not_in"``, omitted for null checks.
+          Numbers compare numerically with numeric values (``1.0`` matches
+          the integer 1); strings compare with text. ``bool`` and other
+          types raise ``TypeError``.
 
         Filters are resolved against the column's symbol table *before*
         row iteration, so non-matching rows are skipped efficiently.
