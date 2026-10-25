@@ -182,7 +182,9 @@ fn cmd_rewrite(args: &[String]) -> Result<(), String> {
     let src = args.first().ok_or("rewrite: missing <in>")?;
     let dst = args.get(1).ok_or("rewrite: missing <out>")?;
     let q = open_qvd(src)?;
-    q.write_to_path(dst).map_err(|e| chain(&e))?;
+    q.to_write_table()
+        .and_then(|t| t.write_to_path(dst))
+        .map_err(|e| chain(&e))?;
     eprintln!("wrote {}", dst);
     Ok(())
 }

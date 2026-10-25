@@ -17,21 +17,6 @@ use crate::warning::Warning;
 const MAX_PREALLOC_ROWS: usize = 256 * 1024 * 1024 / std::mem::size_of::<Cell>();
 const _: () = assert!(MAX_PREALLOC_ROWS > 0 && MAX_PREALLOC_ROWS < u32::MAX as usize);
 
-fn xml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// An in-memory QVD file with headers, symbol tables, and the packed row
 /// index block.
 ///
@@ -40,6 +25,8 @@ fn xml_escape(s: &str) -> String {
 #[derive(Debug)]
 pub struct Qvd {
     header: TableHeader,
+    /// The header exactly as it appeared in the file, terminator included.
+    header_raw: Vec<u8>,
     /// The bytes of the file after the header terminator.
     body: Vec<u8>,
     /// One decoded symbol table per field, in field order.
@@ -66,7 +53,7 @@ impl Qvd {
     pub fn parse(mut bytes: Vec<u8>, options: &ReadOptions) -> Result<Self, QvdError> {
         let (header, header_bytes) = parse(&bytes)?;
         let body: Vec<u8> = bytes.split_off(header_bytes);
-        drop(bytes);
+        let header_raw = bytes;
 
         if let Some(names) = &options.columns {
             for n in names {
@@ -147,6 +134,7 @@ impl Qvd {
 
         Ok(Self {
             header,
+            header_raw,
             body,
             symbol_tables,
             decoded,
@@ -206,15 +194,13 @@ impl Qvd {
         Rows { qvd: self, next: 0 }
     }
 
-    /// Write the QVD back to a byte vector, re-using the already-parsed body
-    /// and regenerating the XML header. This is memory-efficient for large
-    /// files because it does not materialise an intermediate WriteTable; it
-    /// copies the body bytes once and produces a byte-level-equivalent output.
+    /// The file as bytes: the original header, untouched, followed by the
+    /// body. Nothing the reader does not interpret (build number, creator,
+    /// lineage, per-field comments, unknown elements) is lost. To produce a
+    /// new file from the decoded values use [`Self::to_write_table`].
     pub fn to_bytes(&self) -> Result<Vec<u8>, crate::QvdError> {
-        let xml = self.build_xml_header();
-        let mut out = Vec::with_capacity(xml.len() + 1 + self.body.len());
-        out.extend_from_slice(xml.as_bytes());
-        out.push(0x00);
+        let mut out = Vec::with_capacity(self.header_raw.len() + self.body.len());
+        out.extend_from_slice(&self.header_raw);
         out.extend_from_slice(&self.body);
         Ok(out)
     }
@@ -226,88 +212,6 @@ impl Qvd {
         let mut f = std::fs::File::create(path.as_ref())?;
         f.write_all(&bytes)?;
         Ok(())
-    }
-
-    fn build_xml_header(&self) -> String {
-        use std::fmt::Write as FmtWrite;
-        let h = &self.header;
-        let mut s = String::new();
-        let _ = write!(
-            s,
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n\
-<QvdTableHeader>\r\n\
-  <TableName>{}</TableName>\r\n\
-  <Fields>\r\n",
-            xml_escape(&h.table_name)
-        );
-        for f in &h.fields {
-            let nf = &f.number_format;
-            let _ = write!(
-                s,
-                "    <QvdFieldHeader>\r\n\
-      <FieldName>{name}</FieldName>\r\n\
-      <BitOffset>{bo}</BitOffset>\r\n\
-      <BitWidth>{bw}</BitWidth>\r\n\
-      <Bias>{bias}</Bias>\r\n\
-      <NumberFormat>\r\n\
-        <Type>{ty}</Type>\r\n\
-        <nDec>{ndec}</nDec>\r\n\
-        <UseThou>{ut}</UseThou>\r\n\
-        <Fmt>{fmt}</Fmt>\r\n\
-        <Dec>{dec}</Dec>\r\n\
-        <Thou>{thou}</Thou>\r\n\
-      </NumberFormat>\r\n\
-      <NoOfSymbols>{ns}</NoOfSymbols>\r\n\
-      <Offset>{off}</Offset>\r\n\
-      <Length>{len}</Length>\r\n",
-                name = xml_escape(&f.name),
-                bo = f.bit_offset,
-                bw = f.bit_width,
-                bias = f.bias,
-                ty = xml_escape(if nf.r#type.is_empty() {
-                    "UNKNOWN"
-                } else {
-                    &nf.r#type
-                }),
-                ndec = xml_escape(if nf.n_dec.is_empty() { "0" } else { &nf.n_dec }),
-                ut = xml_escape(if nf.use_thou.is_empty() {
-                    "0"
-                } else {
-                    &nf.use_thou
-                }),
-                fmt = xml_escape(&nf.fmt),
-                dec = xml_escape(&nf.dec),
-                thou = xml_escape(&nf.thou),
-                ns = f.no_of_symbols,
-                off = f.offset,
-                len = f.length,
-            );
-            if f.tags.is_empty() {
-                s.push_str("      <Tags/>\r\n");
-            } else {
-                s.push_str("      <Tags>\r\n");
-                for t in &f.tags {
-                    let _ = write!(s, "        <String>{}</String>\r\n", xml_escape(t));
-                }
-                s.push_str("      </Tags>\r\n");
-            }
-            s.push_str("    </QvdFieldHeader>\r\n");
-        }
-        let _ = write!(
-            s,
-            "  </Fields>\r\n\
-  <Compression></Compression>\r\n\
-  <RecordByteSize>{rbs}</RecordByteSize>\r\n\
-  <NoOfRecords>{nr}</NoOfRecords>\r\n\
-  <Offset>{off}</Offset>\r\n\
-  <Length>{len}</Length>\r\n\
-</QvdTableHeader>\r\n",
-            rbs = h.record_byte_size,
-            nr = h.no_of_records,
-            off = h.row_block_offset,
-            len = h.row_block_length,
-        );
-        s
     }
 
     /// Materialise this QVD as a [`crate::WriteTable`], one column per

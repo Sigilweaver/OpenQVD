@@ -69,6 +69,46 @@ pub enum QvdError {
     #[error("invalid QVD header: no TableName and no fields found")]
     HeaderEmpty,
 
+    /// The document's root element is not `QvdTableHeader`.
+    #[error("invalid QVD header: root element is <{found}>, expected <QvdTableHeader>")]
+    UnexpectedRoot {
+        /// The root element that was found.
+        found: String,
+    },
+
+    /// A required header element is missing.
+    #[error("invalid QVD header: missing <{element}>{}", field_suffix(.field))]
+    MissingElement {
+        /// Element name, e.g. `BitWidth`.
+        element: String,
+        /// The field it belongs to, for per-field elements.
+        field: Option<String>,
+    },
+
+    /// A header element appears more than once.
+    #[error("invalid QVD header: duplicate <{element}>{}", field_suffix(.field))]
+    DuplicateElement {
+        /// Element name.
+        element: String,
+        /// The field it belongs to, for per-field elements.
+        field: Option<String>,
+    },
+
+    /// The header uses an XML entity other than the five predefined ones
+    /// and numeric character references.
+    #[error("invalid QVD header: unknown XML entity &{entity};")]
+    UnknownEntity {
+        /// Entity name without `&` and `;`.
+        entity: String,
+    },
+
+    /// The table is compressed; this crate reads only uncompressed tables.
+    #[error("unsupported QVD feature: <Compression> is {value:?}, only empty is supported")]
+    UnsupportedCompression {
+        /// The element's text.
+        value: String,
+    },
+
     /// The XML could not be parsed.
     #[error("xml parse error: {source}")]
     Xml {
@@ -280,6 +320,13 @@ pub enum QvdError {
     },
 }
 
+fn field_suffix(field: &Option<String>) -> String {
+    match field {
+        Some(f) => format!(" in field {f:?}"),
+        None => String::new(),
+    }
+}
+
 impl QvdError {
     /// Coarse classification, for branching and for language bindings.
     pub fn kind(&self) -> ErrorKind {
@@ -289,8 +336,13 @@ impl QvdError {
             HeaderNotFound
             | HeaderNotUtf8
             | HeaderEmpty
+            | UnexpectedRoot { .. }
+            | MissingElement { .. }
+            | DuplicateElement { .. }
+            | UnknownEntity { .. }
             | Xml { .. }
             | InvalidHeaderValue { .. } => ErrorKind::Header,
+            UnsupportedCompression { .. } => ErrorKind::Unsupported,
             RowBlockSizeOverflow
             | RowBlockLengthMismatch { .. }
             | RowBlockOutOfRange { .. }

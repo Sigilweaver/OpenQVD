@@ -100,8 +100,11 @@ fn try_one(p: &Path) -> Result<Outcome, String> {
     }
 
     let a = Qvd::parse(bytes, &ReadOptions::default()).map_err(|e| format!("read A: {e}"))?;
-    // Use the streaming Qvd->bytes path (no intermediate WriteTable).
-    let rewritten = a.to_bytes().map_err(|e| format!("write: {e}"))?;
+    // Re-encode the decoded values with the writer.
+    let rewritten = a
+        .to_write_table()
+        .and_then(|t| t.to_bytes())
+        .map_err(|e| format!("write: {e}"))?;
     let b = Qvd::parse(rewritten, &ReadOptions::default()).map_err(|e| format!("read B: {e}"))?;
 
     if a.num_rows() != b.num_rows() {
