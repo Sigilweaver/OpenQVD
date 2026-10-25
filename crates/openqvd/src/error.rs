@@ -225,6 +225,14 @@ pub enum QvdError {
         name: String,
     },
 
+    /// A column was read that is outside `ReadOptions::columns`, so its
+    /// symbol table was never decoded.
+    #[error("column {field:?} was not decoded; include it in ReadOptions::columns")]
+    FieldNotDecoded {
+        /// Field name.
+        field: String,
+    },
+
     /// A column has a different number of cells than the first column.
     #[error("column {column:?} has {found} cells, expected {expected}")]
     ColumnLengthMismatch {
@@ -296,7 +304,9 @@ impl QvdError {
             | UnterminatedString { .. }
             | UnknownSymbolType { .. }
             | Utf8 { .. } => ErrorKind::Symbol,
-            ColumnNotFound { .. } | ColumnLengthMismatch { .. } => ErrorKind::Schema,
+            ColumnNotFound { .. } | FieldNotDecoded { .. } | ColumnLengthMismatch { .. } => {
+                ErrorKind::Schema
+            }
             CardinalityTooLarge { .. }
             | NulInString
             | LayoutOverflow { .. }

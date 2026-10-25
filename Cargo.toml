@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/openqvd", "crates/openqvd-py"]
+members = ["crates/openqvd", "crates/openqvd-arrow", "crates/openqvd-py"]
 
 [workspace.package]
 version = "2.0.0"
