@@ -62,7 +62,7 @@ class TestSchema:
 
     def test_schema_column_names(self, sample_qvd):
         s = openqvd.schema(sample_qvd)
-        assert s.column_names() == ["Sales Rep Name", "SREP_ID"]
+        assert s.column_names == ["Sales Rep Name", "SREP_ID"]
 
     def test_schema_repr(self, sample_qvd):
         s = openqvd.schema(sample_qvd)

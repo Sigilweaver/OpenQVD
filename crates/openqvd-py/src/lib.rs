@@ -178,6 +178,7 @@ impl PyQvdSchema {
     }
 
     /// Return column names in order.
+    #[getter]
     fn column_names(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.name.clone()).collect()
     }

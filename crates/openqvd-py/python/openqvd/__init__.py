@@ -89,6 +89,7 @@ __all__ = [
     "Schema",
     "FieldInfo",
     "Leniency",
+    "LeniencyLike",
     "ReadWarning",
     "QvdError",
     "QvdIOError",

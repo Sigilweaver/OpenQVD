@@ -39,11 +39,21 @@ impl fmt::Display for LenientCheck {
 
 /// Returned by [`LenientCheck::from_str`] for an unknown name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownCheck(pub String);
+#[non_exhaustive]
+pub struct UnknownCheck {
+    name: String,
+}
+
+impl UnknownCheck {
+    /// The name that was not recognised.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
 
 impl fmt::Display for UnknownCheck {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown lenient check {:?}", self.0)
+        write!(f, "unknown lenient check {:?}", self.name)
     }
 }
 
@@ -57,7 +67,7 @@ impl FromStr for LenientCheck {
             .iter()
             .copied()
             .find(|c| c.as_str() == s)
-            .ok_or_else(|| UnknownCheck(s.to_owned()))
+            .ok_or_else(|| UnknownCheck { name: s.to_owned() })
     }
 }
 

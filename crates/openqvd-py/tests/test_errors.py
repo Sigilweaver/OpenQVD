@@ -147,4 +147,4 @@ def test_schema_does_not_decode_symbols(good_qvd, tmp_path):
     p.write_bytes(bytes(data))
     s = openqvd.schema(p)
     assert s.num_rows == 3
-    assert s.column_names() == ["a", "b"]
+    assert s.column_names == ["a", "b"]
