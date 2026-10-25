@@ -45,6 +45,45 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   after `path`. `Schema.warnings` and `openqvd.QvdWarning` report what a
   lenient read tolerated.
 
+- Arrow is out of the core crate. `openqvd` has no Arrow dependency and no
+  `arrow` feature. The new `openqvd-arrow` crate converts between `Qvd` and
+  Arrow `RecordBatch`es, with one feature and module per Arrow major
+  (`arrow-59` / `openqvd_arrow::v59`, `arrow-60` / `v60`); both can be enabled
+  at once. A new Arrow major is a new feature, not a new openqvd major.
+  `Qvd::to_record_batch`, `to_record_batch_filtered` and the root-level
+  `record_batch_to_write_table` are replaced by
+  `vNN::to_record_batch(&qvd, &BatchOptions)`,
+  `vNN::record_batch_to_write_table` and `vNN::record_batches_to_write_table`.
+- The core crate exposes Arrow-free decoded columns: `Qvd::column(i)` returns a
+  `ColumnData` (a `ColumnType`, one converted value per distinct symbol, and
+  the symbol index of each row), and `Qvd::select_rows(&[Filter])` returns the
+  rows matching filters. `Filter` and `ColumnFilter` moved here from the
+  Arrow module.
+- Python: `openqvd.read` returns `openqvd.Table`, not `pyarrow.Table`. It has
+  `num_rows`, `column_names`, `warnings`, `__arrow_c_stream__`,
+  `__arrow_c_schema__`, `to_pyarrow()`, `to_polars()` and `to_pandas()`.
+  `openqvd.write` accepts any object with `__arrow_c_stream__` or
+  `__arrow_c_array__`.
+- Python: pyarrow is no longer a dependency. New extras: `pyarrow`, `polars`,
+  `pandas`, `duckdb`, `all`. Minimums: pyarrow 15, Polars 1.10, pandas 2.2,
+  DuckDB 1.2 (each checked with the test suite).
+- Python: wheels are `abi3` (`cp310-abi3`): one wheel per platform covers every
+  CPython 3.10 and later. PyPy is no longer a declared target.
+- Python: `pl.from_arrow(openqvd.read(...))` returns a `Series`, not a
+  `DataFrame`; use `Table.to_polars()` or `polars.DataFrame(table)`.
+
+### Fixed
+
+- `write` wrote only the first batch of a table whose column could not be
+  combined into one chunk; every batch is now converted (S2-4).
+- A filter on a column holding NaN no longer drops the NaN rows: rows are
+  matched by symbol index (S2-3, the NaN half).
+- Filtering a table that has an all-NULL column no longer fails with an Arrow
+  length error.
+- Reading a column that was left out of `ReadOptions::columns` is an error
+  (`FieldNotDecoded`) instead of an all-NULL column (S2-6, Arrow and column
+  paths; `Qvd::rows()` still yields `None` for such fields).
+
 ### Behavior changes
 
 - Asking for a column that is not in the file now fails when the file is

@@ -9,31 +9,36 @@ import pytest
 import openqvd
 
 
+def _read(*args, **kwargs):
+    """Read and convert to a pyarrow Table for assertions."""
+    return openqvd.read(*args, **kwargs).to_pyarrow()
+
+
 class TestRead:
-    """openqvd.read() tests."""
+    """_read() tests."""
 
     def test_basic_read(self, sample_qvd):
-        tbl = openqvd.read(sample_qvd)
+        tbl = _read(sample_qvd)
         assert isinstance(tbl, pa.Table)
         assert tbl.num_rows == 4
         assert tbl.num_columns == 2
 
     def test_column_names(self, sample_qvd):
-        tbl = openqvd.read(sample_qvd)
+        tbl = _read(sample_qvd)
         assert tbl.schema.names == ["Sales Rep Name", "SREP_ID"]
 
     def test_projection_pushdown(self, sample_qvd):
-        tbl = openqvd.read(sample_qvd, columns=["Sales Rep Name"])
+        tbl = _read(sample_qvd, columns=["Sales Rep Name"])
         assert tbl.num_columns == 1
         assert tbl.schema.names == ["Sales Rep Name"]
         assert tbl.num_rows == 4
 
     def test_projection_nonexistent_column_raises(self, sample_qvd):
         with pytest.raises(ValueError, match="not found"):
-            openqvd.read(sample_qvd, columns=["NONEXISTENT"])
+            _read(sample_qvd, columns=["NONEXISTENT"])
 
     def test_read_with_nulls(self, multi_type_qvd):
-        tbl = openqvd.read(multi_type_qvd)
+        tbl = _read(multi_type_qvd)
         assert tbl.num_rows == 5
         # The ID column has a NULL in the last row
         id_col = tbl.column("ID")
@@ -41,7 +46,7 @@ class TestRead:
 
     def test_read_nonexistent_file_raises(self):
         with pytest.raises(Exception):
-            openqvd.read("/nonexistent/path/file.qvd")
+            _read("/nonexistent/path/file.qvd")
 
 
 class TestSchema:
@@ -75,7 +80,7 @@ class TestPredicatePushdown:
     """Tests for predicate/filter pushdown."""
 
     def test_filter_eq(self, sample_qvd):
-        tbl = openqvd.read(
+        tbl = _read(
             sample_qvd,
             filters=[{"column": "Sales Rep Name", "op": "eq", "value": "Sam"}],
         )
@@ -83,7 +88,7 @@ class TestPredicatePushdown:
         assert tbl.column("Sales Rep Name").to_pylist() == ["Sam"]
 
     def test_filter_is_in(self, sample_qvd):
-        tbl = openqvd.read(
+        tbl = _read(
             sample_qvd,
             filters=[
                 {"column": "Sales Rep Name", "op": "is_in", "value": ["Sam", "Sue"]},
@@ -95,7 +100,7 @@ class TestPredicatePushdown:
         assert "Sue" in names
 
     def test_filter_not_in(self, sample_qvd):
-        tbl = openqvd.read(
+        tbl = _read(
             sample_qvd,
             filters=[
                 {"column": "Sales Rep Name", "op": "not_in", "value": ["Sam"]},
@@ -106,7 +111,7 @@ class TestPredicatePushdown:
         assert "Sam" not in names
 
     def test_filter_combined_with_projection(self, sample_qvd):
-        tbl = openqvd.read(
+        tbl = _read(
             sample_qvd,
             columns=["Sales Rep Name"],
             filters=[{"column": "SREP_ID", "op": "eq", "value": "11"}],
@@ -116,7 +121,7 @@ class TestPredicatePushdown:
         assert tbl.column("Sales Rep Name").to_pylist() == ["Sam"]
 
     def test_filter_no_match(self, sample_qvd):
-        tbl = openqvd.read(
+        tbl = _read(
             sample_qvd,
             filters=[{"column": "Sales Rep Name", "op": "eq", "value": "NOBODY"}],
         )
@@ -124,14 +129,14 @@ class TestPredicatePushdown:
 
     def test_filter_invalid_op_raises(self, sample_qvd):
         with pytest.raises(ValueError, match="unknown filter op"):
-            openqvd.read(
+            _read(
                 sample_qvd,
                 filters=[{"column": "Sales Rep Name", "op": "BADOP", "value": "x"}],
             )
 
     def test_filter_missing_column_raises(self, sample_qvd):
         with pytest.raises((ValueError, Exception)):
-            openqvd.read(
+            _read(
                 sample_qvd,
                 filters=[{"column": "NONEXISTENT", "op": "eq", "value": "x"}],
             )
@@ -141,12 +146,12 @@ class TestWrite:
     """openqvd.write() round-trip tests."""
 
     def test_write_round_trip(self, sample_qvd):
-        tbl = openqvd.read(sample_qvd)
+        tbl = _read(sample_qvd)
         with tempfile.NamedTemporaryFile(suffix=".qvd", delete=False) as tmp:
             out = tmp.name
         try:
             openqvd.write(tbl, out)
-            tbl2 = openqvd.read(out)
+            tbl2 = _read(out)
             assert tbl2.num_rows == tbl.num_rows
             assert tbl2.num_columns == tbl.num_columns
             assert tbl2.schema.names == tbl.schema.names
@@ -154,7 +159,7 @@ class TestWrite:
             os.unlink(out)
 
     def test_write_with_table_name(self, sample_qvd):
-        tbl = openqvd.read(sample_qvd)
+        tbl = _read(sample_qvd)
         with tempfile.NamedTemporaryFile(suffix=".qvd", delete=False) as tmp:
             out = tmp.name
         try:
@@ -165,12 +170,12 @@ class TestWrite:
             os.unlink(out)
 
     def test_write_preserves_values(self, sample_qvd):
-        tbl = openqvd.read(sample_qvd)
+        tbl = _read(sample_qvd)
         with tempfile.NamedTemporaryFile(suffix=".qvd", delete=False) as tmp:
             out = tmp.name
         try:
             openqvd.write(tbl, out)
-            tbl2 = openqvd.read(out)
+            tbl2 = _read(out)
             for col_name in tbl.schema.names:
                 orig = tbl.column(col_name).to_pylist()
                 written = tbl2.column(col_name).to_pylist()
@@ -179,12 +184,12 @@ class TestWrite:
             os.unlink(out)
 
     def test_write_with_nulls(self, multi_type_qvd):
-        tbl = openqvd.read(multi_type_qvd)
+        tbl = _read(multi_type_qvd)
         with tempfile.NamedTemporaryFile(suffix=".qvd", delete=False) as tmp:
             out = tmp.name
         try:
             openqvd.write(tbl, out)
-            tbl2 = openqvd.read(out)
+            tbl2 = _read(out)
             assert tbl2.num_rows == tbl.num_rows
             # Check that NULLs are preserved
             for col_name in tbl.schema.names:

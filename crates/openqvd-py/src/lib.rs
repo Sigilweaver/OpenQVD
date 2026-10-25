@@ -8,7 +8,15 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3_arrow::PyRecordBatch;
+use pyo3::types::{PyCapsule, PyCapsuleMethods};
+
+use arrow_array::ffi::{from_ffi, FFI_ArrowArray};
+use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader, StructArray};
+use arrow_schema::ffi::FFI_ArrowSchema;
+use arrow_schema::SchemaRef;
+use openqvd_arrow::v60 as arrow_v;
+use std::ffi::CString;
 
 // ---------------------------------------------------------------------------
 // Error helpers
@@ -213,6 +221,123 @@ impl PyFieldInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Arrow PyCapsule interface (https://arrow.apache.org/docs/format/CDataInterface/PyCapsules.html)
+// ---------------------------------------------------------------------------
+
+fn arrow_err(e: impl std::fmt::Display) -> PyErr {
+    to_py(openqvd::QvdError::Arrow {
+        detail: e.to_string(),
+    })
+}
+
+fn capsule_name(name: &str) -> PyResult<CString> {
+    CString::new(name).map_err(arrow_err)
+}
+
+/// Decoded table data handed to Python as an Arrow stream.
+///
+/// Private; the public `openqvd.Table` wraps it.
+#[pyclass(module = "openqvd._openqvd", name = "_Batches", frozen)]
+struct PyBatches {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+}
+
+#[pymethods]
+impl PyBatches {
+    #[getter]
+    fn num_rows(&self) -> usize {
+        self.batches.iter().map(|b| b.num_rows()).sum()
+    }
+
+    #[getter]
+    fn column_names(&self) -> Vec<String> {
+        self.schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
+    /// Arrow C stream capsule. ``requested_schema`` is accepted and ignored:
+    /// the data is always produced in its own schema, which the consumer
+    /// must handle (allowed by the PyCapsule specification).
+    #[pyo3(signature = (requested_schema=None))]
+    fn __arrow_c_stream__<'py>(
+        &self,
+        py: Python<'py>,
+        requested_schema: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyCapsule>> {
+        let _ = requested_schema;
+        let reader = RecordBatchIterator::new(
+            self.batches.clone().into_iter().map(Ok),
+            self.schema.clone(),
+        );
+        let stream = FFI_ArrowArrayStream::new(Box::new(reader));
+        // The destructor owns `stream`; dropping it releases the stream
+        // unless a consumer already moved it out.
+        PyCapsule::new_with_value_and_destructor(
+            py,
+            stream,
+            c"arrow_array_stream",
+            |_stream, _ctx| {},
+        )
+    }
+
+    /// Arrow C schema capsule.
+    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyCapsule>> {
+        let schema = FFI_ArrowSchema::try_from(self.schema.as_ref()).map_err(arrow_err)?;
+        PyCapsule::new_with_value_and_destructor(py, schema, c"arrow_schema", |_schema, _ctx| {})
+    }
+}
+
+/// Take the contents out of a capsule produced by another library.
+///
+/// # Safety contract
+/// The capsule must have been created by an implementation of the Arrow
+/// PyCapsule interface with the given name; the name is checked.
+fn take_capsule<T>(capsule: &Bound<'_, PyAny>, name: &str, empty: T) -> PyResult<T> {
+    let capsule = capsule.cast::<PyCapsule>().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(format!("expected a {name:?} PyCapsule"))
+    })?;
+    let cname = capsule_name(name)?;
+    let ptr = capsule.pointer_checked(Some(cname.as_c_str()))?;
+    // SAFETY: the name matched, so the pointer refers to a live `T` laid out
+    // as the Arrow C Data Interface specifies. Replacing it with an empty
+    // (released) value transfers ownership to us, as the specification
+    // requires of a consumer.
+    Ok(unsafe { std::ptr::replace(ptr.as_ptr() as *mut T, empty) })
+}
+
+/// Read every batch from any object that implements `__arrow_c_stream__` or
+/// `__arrow_c_array__`.
+fn batches_from_py(obj: &Bound<'_, PyAny>) -> PyResult<(SchemaRef, Vec<RecordBatch>)> {
+    if obj.hasattr("__arrow_c_stream__")? {
+        let cap = obj.call_method0("__arrow_c_stream__")?;
+        let stream = take_capsule(&cap, "arrow_array_stream", FFI_ArrowArrayStream::empty())?;
+        let reader = ArrowArrayStreamReader::try_new(stream).map_err(arrow_err)?;
+        let schema = reader.schema();
+        let batches = reader.collect::<Result<Vec<_>, _>>().map_err(arrow_err)?;
+        Ok((schema, batches))
+    } else if obj.hasattr("__arrow_c_array__")? {
+        let pair = obj.call_method0("__arrow_c_array__")?;
+        let (schema_cap, array_cap): (Bound<'_, PyAny>, Bound<'_, PyAny>) = pair.extract()?;
+        let schema = take_capsule(&schema_cap, "arrow_schema", FFI_ArrowSchema::empty())?;
+        let array = take_capsule(&array_cap, "arrow_array", FFI_ArrowArray::empty())?;
+        // SAFETY: schema and array come from the same producer and were
+        // moved out of their capsules above.
+        let data = unsafe { from_ffi(array, &schema) }.map_err(arrow_err)?;
+        let batch = RecordBatch::from(StructArray::from(data));
+        Ok((batch.schema(), vec![batch]))
+    } else {
+        Err(pyo3::exceptions::PyTypeError::new_err(
+            "expected an object implementing __arrow_c_stream__ or __arrow_c_array__ \
+             (for example a pyarrow or polars table)",
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Filter helpers
 // ---------------------------------------------------------------------------
 
@@ -305,7 +430,7 @@ fn parse_py_filters(
 // Core read function
 // ---------------------------------------------------------------------------
 
-/// Read a QVD file and return an Arrow RecordBatch plus any warnings.
+/// Read a QVD file and return its data as an Arrow stream plus any warnings.
 ///
 /// Parameters
 /// ----------
@@ -325,7 +450,7 @@ fn parse_py_filters(
 ///
 /// Returns
 /// -------
-/// tuple[pyarrow.RecordBatch, list[ReadWarning]]
+/// tuple[_Batches, list[ReadWarning]]
 ///     The decoded table data and what a lenient read tolerated.
 #[pyfunction]
 #[pyo3(signature = (path, columns=None, filters=None, leniency=None))]
@@ -335,7 +460,7 @@ fn read(
     columns: Option<Vec<String>>,
     filters: Option<Bound<'_, pyo3::types::PyList>>,
     leniency: Option<Vec<String>>,
-) -> PyResult<(PyRecordBatch, Vec<PyReadWarning>)> {
+) -> PyResult<(PyBatches, Vec<PyReadWarning>)> {
     let leniency = parse_leniency(leniency)?;
     let rust_filters = match filters {
         Some(ref f) if !f.is_empty() => Some(parse_py_filters(py, f)?),
@@ -359,17 +484,22 @@ fn read(
     }
     let qvd = openqvd::Qvd::open(path, &options).map_err(to_py)?;
 
-    let col_refs: Option<Vec<&str>> = columns
-        .as_ref()
-        .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let batch = match rust_filters {
-        Some(ref fs) if !fs.is_empty() => qvd
-            .to_record_batch_filtered(col_refs.as_deref(), fs)
-            .map_err(to_py)?,
-        _ => qvd.to_record_batch(col_refs.as_deref()).map_err(to_py)?,
-    };
+    let mut batch_options = openqvd_arrow::BatchOptions::new();
+    if let Some(cols) = columns {
+        batch_options = batch_options.with_columns(cols);
+    }
+    if let Some(fs) = rust_filters {
+        batch_options = batch_options.with_filters(fs);
+    }
+    let batch = arrow_v::to_record_batch(&qvd, &batch_options).map_err(to_py)?;
     let warnings = qvd.warnings().iter().map(PyReadWarning::from).collect();
-    Ok((PyRecordBatch::new(batch), warnings))
+    Ok((
+        PyBatches {
+            schema: batch.schema(),
+            batches: vec![batch],
+        },
+        warnings,
+    ))
 }
 
 /// Read only the schema/metadata of a QVD file without decoding symbol
@@ -418,13 +548,14 @@ fn schema(path: &str, leniency: Option<Vec<String>>) -> PyResult<PyQvdSchema> {
 // Write function
 // ---------------------------------------------------------------------------
 
-/// Write an Arrow RecordBatch (or any object with __arrow_c_array__) to a
-/// QVD file.
+/// Write Arrow data to a QVD file.
 ///
 /// Parameters
 /// ----------
-/// data : pyarrow.RecordBatch
-///     Data to write.
+/// data : object
+///     Anything implementing ``__arrow_c_stream__`` or ``__arrow_c_array__``
+///     (a pyarrow Table, RecordBatch or RecordBatchReader, a polars
+///     DataFrame, an ``openqvd.Table``, ...). Every batch is written.
 /// path : str
 ///     Destination file path.
 /// table_name : str, optional
@@ -435,12 +566,12 @@ fn schema(path: &str, leniency: Option<Vec<String>>) -> PyResult<PyQvdSchema> {
 #[pyfunction]
 #[pyo3(signature = (data, path, table_name=None, leniency=None))]
 fn write(
-    data: PyRecordBatch,
+    data: &Bound<'_, PyAny>,
     path: &str,
     table_name: Option<&str>,
     leniency: Option<Vec<String>>,
 ) -> PyResult<()> {
-    let batch = data.into_inner();
+    let (schema, batches) = batches_from_py(data)?;
     let stem = std::path::Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -448,7 +579,7 @@ fn write(
     let options = openqvd::WriteOptions::default()
         .with_table_name(table_name.unwrap_or(stem))
         .with_leniency(parse_leniency(leniency)?);
-    let wt = openqvd::record_batch_to_write_table(&batch, &options).map_err(to_py)?;
+    let wt = arrow_v::record_batches_to_write_table(schema, &batches, &options).map_err(to_py)?;
     wt.write_to_path(path).map_err(to_py)?;
     Ok(())
 }
@@ -468,6 +599,7 @@ fn _openqvd(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write, m)?)?;
     m.add_function(wrap_pyfunction!(lenient_checks, m)?)?;
     m.add_class::<PyReadWarning>()?;
+    m.add_class::<PyBatches>()?;
     m.add_class::<PyQvdSchema>()?;
     m.add_class::<PyFieldInfo>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

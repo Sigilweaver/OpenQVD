@@ -2,11 +2,17 @@
 
 from typing import Any, List, Optional, Sequence, Tuple
 
-import pyarrow as pa
-
 __version__: str
 
 def lenient_checks() -> List[str]: ...
+
+class _Batches:
+    @property
+    def num_rows(self) -> int: ...
+    @property
+    def column_names(self) -> List[str]: ...
+    def __arrow_c_stream__(self, requested_schema: Optional[Any] = None) -> Any: ...
+    def __arrow_c_schema__(self) -> Any: ...
 
 class ReadWarning:
     @property
@@ -49,7 +55,7 @@ def read(
     columns: Optional[Sequence[str]] = None,
     filters: Optional[List[dict]] = None,
     leniency: Optional[Sequence[str]] = None,
-) -> Tuple[pa.RecordBatch, List[ReadWarning]]: ...
+) -> Tuple[_Batches, List[ReadWarning]]: ...
 def schema(path: str, leniency: Optional[Sequence[str]] = None) -> Schema: ...
 def write(
     data: Any,

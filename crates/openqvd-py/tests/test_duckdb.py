@@ -93,7 +93,7 @@ class TestFromQuery:
             qdb.from_query('SELECT "Sales Rep Name" FROM reps', out, con=con)
             result = openqvd.read(out)
             assert result.num_columns == 1
-            assert result.schema.names == ["Sales Rep Name"]
+            assert result.column_names == ["Sales Rep Name"]
         finally:
             os.unlink(out)
 
@@ -140,6 +140,6 @@ class TestFromQuery:
             qdb.from_query("SELECT * FROM reps", out, con=con)
             roundtripped = openqvd.read(out)
             assert roundtripped.num_rows == original.num_rows
-            assert roundtripped.schema.names == original.schema.names
+            assert roundtripped.column_names == original.column_names
         finally:
             os.unlink(out)

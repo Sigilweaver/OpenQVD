@@ -59,7 +59,7 @@ def read_qvd(
     polars.DataFrame
     """
     table = openqvd.read(path, columns=columns, filters=filters, leniency=leniency)
-    return pl.from_arrow(table)
+    return table.to_polars()
 
 
 def scan_qvd(
@@ -141,8 +141,7 @@ class QvdDataFrameNamespace:
         >>> df = pl.DataFrame({"x": [1, 2], "y": ["a", "b"]})
         >>> df.qvd.write("out.qvd")
         """
-        table = self._df.to_arrow()
-        openqvd.write(table, path, table_name=table_name, leniency=leniency)
+        openqvd.write(self._df, path, table_name=table_name, leniency=leniency)
 
 
 # ---------------------------------------------------------------------------

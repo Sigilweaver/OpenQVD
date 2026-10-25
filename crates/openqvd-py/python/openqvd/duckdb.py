@@ -70,7 +70,7 @@ def to_relation(
     if con is None:
         con = duckdb.connect()
 
-    table = openqvd.read(str(path), leniency=leniency)
+    table = openqvd.read(str(path), leniency=leniency).to_pyarrow()
     if view_name is not None:
         con.register(view_name, table)
         return con.table(view_name)
@@ -103,7 +103,7 @@ def register(con, name: str, path: Union[str, Path], *, leniency=None) -> None:
     """
     import openqvd
 
-    table = openqvd.read(str(path), leniency=leniency)
+    table = openqvd.read(str(path), leniency=leniency).to_pyarrow()
     con.register(name, table)
 
 
