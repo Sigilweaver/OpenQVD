@@ -113,7 +113,11 @@ __all__ = [
 
 
 def schema(path: Union[str, Path], *, leniency: LeniencyLike = None) -> Schema:
-    """Read a QVD file's metadata without decoding symbol tables or rows.
+    """Read a QVD file's metadata without decoding symbol tables.
+
+    The header and the row block are still validated (one pass over the
+    rows), so a structurally damaged file raises here, but no values are
+    decoded.
 
     Parameters
     ----------

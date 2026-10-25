@@ -247,7 +247,6 @@ fn earliest_terminator_wins_over_a_later_crlf_match_in_the_body() {
     v.push(0);
     v.extend_from_slice(&sym);
     v.push(0); // the row
-    v.extend_from_slice(b"\0"); // keeps the decoy followed by NUL somewhere
     let q = parse(v).unwrap();
     assert_eq!(q.num_rows(), 1);
     let rows: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();

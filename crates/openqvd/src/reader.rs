@@ -17,6 +17,9 @@ use crate::warning::Warning;
 const MAX_PREALLOC_ROWS: usize = 256 * 1024 * 1024 / std::mem::size_of::<Cell>();
 const _: () = assert!(MAX_PREALLOC_ROWS > 0 && MAX_PREALLOC_ROWS < u32::MAX as usize);
 
+/// Widest bit field the reader accepts: a u32 symbol count plus a bias of 2.
+const MAX_BIT_WIDTH: u32 = 33;
+
 /// An in-memory QVD file with headers, symbol tables, and the packed row
 /// index block.
 ///
@@ -75,35 +78,108 @@ impl Qvd {
                 expected: expected_len,
             });
         }
-        // Bit-field coverage check.
-        let total_bits = header.record_byte_size.saturating_mul(8);
-        let mut used = vec![false; total_bits as usize];
-        for f in &header.fields {
+        // The row block must lie within the body, and nothing may follow it.
+        let row_start = u64::from(header.row_block_offset);
+        let row_end = row_start + u64::from(header.row_block_length);
+        if row_end > body.len() as u64 {
+            return Err(QvdError::RowBlockOutOfRange {
+                start: row_start,
+                end: row_end,
+                body_len: body.len(),
+            });
+        }
+        if row_end < body.len() as u64 {
+            return Err(QvdError::TrailingBytes {
+                extra: body.len() as u64 - row_end,
+            });
+        }
+
+        // Per-field bit layout. Widths are bounded by what an index can need:
+        // NoOfSymbols is a u32 and Bias is at most 2 below zero.
+        let total_bits = u64::from(header.record_byte_size) * 8;
+        let mut spans: Vec<(u64, u64, usize)> = Vec::new();
+        for (fi, f) in header.fields.iter().enumerate() {
+            if f.bit_width > MAX_BIT_WIDTH {
+                return Err(QvdError::BitWidthOutOfRange {
+                    field: f.name.clone(),
+                    bit_width: f.bit_width,
+                    max: MAX_BIT_WIDTH,
+                });
+            }
+            if !matches!(f.bias, 0 | -2) {
+                return Err(QvdError::UnsupportedBias {
+                    field: f.name.clone(),
+                    bias: f.bias,
+                });
+            }
             if f.bit_width == 0 {
                 continue;
             }
-            let out_of_range = || QvdError::FieldBitsOutOfRange {
-                field: f.name.clone(),
-                bit_offset: f.bit_offset,
-                bit_width: f.bit_width,
-                record_bits: total_bits,
-            };
-            let end = f
-                .bit_offset
-                .checked_add(f.bit_width)
-                .ok_or_else(out_of_range)?;
+            let start = u64::from(f.bit_offset);
+            let end = start + u64::from(f.bit_width);
             if end > total_bits {
-                return Err(out_of_range());
+                return Err(QvdError::FieldBitsOutOfRange {
+                    field: f.name.clone(),
+                    bit_offset: f.bit_offset,
+                    bit_width: f.bit_width,
+                    record_bits: total_bits.min(u64::from(u32::MAX)) as u32,
+                });
             }
-            for b in f.bit_offset..end {
-                if used[b as usize] {
-                    return Err(QvdError::FieldBitsOverlap {
-                        field: f.name.clone(),
-                        bit: b,
-                    });
-                }
-                used[b as usize] = true;
+            spans.push((start, end, fi));
+        }
+        spans.sort_by_key(|(start, _, _)| *start);
+        for pair in spans.windows(2) {
+            if pair[1].0 < pair[0].1 {
+                return Err(QvdError::FieldBitsOverlap {
+                    field: header.fields[pair[1].2].name.clone(),
+                    bit: pair[1].0 as u32,
+                });
             }
+        }
+
+        // Symbol tables tile the region in front of the row block exactly:
+        // disjoint, in order, no gaps (SPEC 1.4.1).
+        let mut regions: Vec<(u64, u64, usize)> = header
+            .fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.length > 0)
+            .map(|(fi, f)| {
+                let start = u64::from(f.offset);
+                (start, start + u64::from(f.length), fi)
+            })
+            .collect();
+        regions.sort_by_key(|(start, _, _)| *start);
+        let mut cursor = 0u64;
+        for (start, end, fi) in &regions {
+            let f = &header.fields[*fi];
+            if *end > row_start {
+                return Err(QvdError::SymbolRegionInRowBlock {
+                    field: f.name.clone(),
+                    start: *start,
+                    end: *end,
+                    row_block_start: row_start,
+                });
+            }
+            if *start < cursor {
+                return Err(QvdError::SymbolRegionOverlap {
+                    field: f.name.clone(),
+                    start: *start,
+                });
+            }
+            if *start > cursor {
+                return Err(QvdError::SymbolRegionGap {
+                    start: cursor,
+                    end: *start,
+                });
+            }
+            cursor = *end;
+        }
+        if cursor != row_start {
+            return Err(QvdError::SymbolRegionGap {
+                start: cursor,
+                end: row_start,
+            });
         }
 
         let mut symbol_tables = Vec::with_capacity(header.fields.len());
@@ -121,25 +197,60 @@ impl Qvd {
             }
         }
 
-        // Row block must lie within the body.
-        let row_start = u64::from(header.row_block_offset);
-        let row_end = row_start + u64::from(header.row_block_length);
-        if row_end > body.len() as u64 {
-            return Err(QvdError::RowBlockOutOfRange {
-                start: row_start,
-                end: row_end,
-                body_len: body.len(),
-            });
-        }
-
-        Ok(Self {
+        let qvd = Self {
             header,
             header_raw,
             body,
             symbol_tables,
             decoded,
             warnings,
-        })
+        };
+        qvd.validate_rows(&spans)?;
+        Ok(qvd)
+    }
+
+    /// One pass over the row block: bits no field claims must be zero
+    /// (SPEC 1.4.3), and every decoded field's symbol index must exist.
+    fn validate_rows(&self, spans: &[(u64, u64, usize)]) -> Result<(), QvdError> {
+        let rbs = self.header.record_byte_size as usize;
+        let mut n = self.header.no_of_records as usize;
+        if rbs == 0 {
+            // Zero-width records carry no bits: every row is the same, so one
+            // row proves the lot. (A crafted NoOfRecords of 2^32 - 1 in a
+            // 600-byte file used to cost seconds here.)
+            n = n.min(1);
+        }
+        if n == 0 {
+            return Ok(());
+        }
+        // Mask of the bits that carry data, one byte per record byte.
+        let mut claimed = vec![0u8; rbs];
+        for (start, end, _) in spans {
+            for bit in *start..*end {
+                claimed[(bit / 8) as usize] |= 1 << (bit % 8);
+            }
+        }
+        let any_unclaimed = claimed.iter().any(|&m| m != 0xFF);
+        for idx in 0..n {
+            let rec = self.record(idx);
+            if any_unclaimed {
+                for (byte, (&b, &m)) in rec.iter().zip(&claimed).enumerate() {
+                    if b & !m != 0 {
+                        return Err(QvdError::UnusedBitsSet {
+                            row: idx as u64,
+                            byte: byte as u32,
+                        });
+                    }
+                }
+            }
+            let rec_int = le_bits_to_u128(rec);
+            for (i, f) in self.header.fields.iter().enumerate() {
+                if self.decoded[i] {
+                    self.resolve(idx, i, f, rec, rec_int)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Table name from `<TableName>`.
