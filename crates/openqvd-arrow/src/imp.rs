@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    builder::LargeStringBuilder, cast::AsArray, types::*, Array, ArrayRef,
+    builder::LargeStringBuilder, cast::AsArray, types::*, Array, ArrayRef, ArrowPrimitiveType,
     Date32Array, DurationMicrosecondArray, Float64Array, Int64Array, NullArray, RecordBatch,
     TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field as ArrowField, Schema, SchemaRef, TimeUnit};
 
 use openqvd::{
-    Column, ColumnData, ColumnValues, Dual, Qvd, QvdError, Value, WriteOptions, WriteTable,
+    Column, ColumnData, ColumnValues, Dual, Leniency, LenientCheck, Qvd, QvdError, Value, Warning,
+    WarningKind, WriteOptions, WriteTable,
 };
 
 use crate::BatchOptions;
@@ -114,7 +115,7 @@ fn column_to_array(col: &ColumnData) -> Result<ArrayRef, QvdError> {
 
 /// Convert an Arrow `RecordBatch` to a [`WriteTable`].
 ///
-/// See [`record_batches_to_write_table`] for several batches.
+/// See [`record_batches_to_write_table`] for the type mapping.
 pub fn record_batch_to_write_table(
     batch: &RecordBatch,
     options: &WriteOptions,
@@ -125,14 +126,35 @@ pub fn record_batch_to_write_table(
 /// Convert Arrow batches sharing `schema` to one [`WriteTable`]. Every batch
 /// is converted; none is dropped.
 ///
-/// Supported Arrow types: Int8/16/32/64, UInt8/16/32/64, Float32/64,
-/// Utf8/LargeUtf8, Boolean, Date32 and Timestamp(Microsecond).
+/// The accepted Arrow types and what they become are fixed; anything else is
+/// `QvdError::UnsupportedArrowType`, never a text rendering:
+///
+/// | Arrow type | QVD value |
+/// |---|---|
+/// | Int8/16/32, UInt8/16 | integer |
+/// | Int64, UInt32, UInt64 | integer when it fits 32 bits, else a dual (float number, exact decimal text); an error beyond 2^53 |
+/// | Float32/64 | float |
+/// | Decimal128/256 | dual (float number, exact decimal text); an error unless the unscaled value is below 2^53 and the scale at most 22 |
+/// | Utf8, LargeUtf8, Utf8View | string |
+/// | Boolean | integer 0/1 |
+/// | Date32, Date64 (whole days) | dual (day serial, ISO date) |
+/// | Timestamp(any unit) | dual (day serial, ISO date-time); a time zone is an error unless `timezone_to_utc` is allowed |
+/// | Time32, Time64, Duration | dual (fraction of a day, `h:mm:ss`) |
+/// | Dictionary | its values, converted by the row above |
+/// | Null | NULL |
+///
+/// Day serials are `f64`, so timestamps resolve to about a microsecond;
+/// nanoseconds are rounded to the nearest microsecond.
+///
+/// Anything tolerated because of `options.leniency` is listed in
+/// [`WriteTable::warnings`].
 pub fn record_batches_to_write_table(
     schema: SchemaRef,
     batches: &[RecordBatch],
     options: &WriteOptions,
 ) -> Result<WriteTable, QvdError> {
     let mut columns: Vec<Column> = Vec::with_capacity(schema.fields().len());
+    let mut warnings: Vec<Warning> = Vec::new();
     for (col_idx, field) in schema.fields().iter().enumerate() {
         let mut cells: Vec<Option<Value>> = Vec::new();
         for batch in batches {
@@ -141,227 +163,350 @@ pub fn record_batches_to_write_table(
             {
                 return Err(arrow_err("batches do not share one schema"));
             }
-            convert_array(batch.column(col_idx), field.data_type(), &mut cells)?;
+            let mut ctx = Ctx {
+                column: field.name(),
+                leniency: &options.leniency,
+                warnings: &mut warnings,
+            };
+            convert_array(&mut ctx, batch.column(col_idx), &mut cells)?;
         }
         let mut col = Column::new(field.name().to_string(), cells);
         // Reflect Arrow type back as a NumberFormat hint.
         col.number_format.r#type = arrow_type_to_nf(field.data_type()).to_string();
         columns.push(col);
     }
-    WriteTable::new(options.table_name.clone(), columns)
+    Ok(WriteTable::new(options.table_name.clone(), columns)?.with_warnings(warnings))
+}
+
+/// What a conversion needs to report errors and lenient decisions.
+struct Ctx<'a> {
+    column: &'a str,
+    leniency: &'a Leniency,
+    warnings: &'a mut Vec<Warning>,
+}
+
+impl Ctx<'_> {
+    fn not_representable(
+        &self,
+        value: impl std::fmt::Display,
+        detail: &'static str,
+    ) -> QvdError {
+        QvdError::ValueNotRepresentable {
+            column: self.column.to_owned(),
+            value: value.to_string(),
+            detail,
+        }
+    }
+}
+
+/// Largest integer magnitude an f64 holds exactly.
+const MAX_EXACT: i64 = 1 << 53;
+const MICROS_PER_DAY: i128 = 86_400_000_000;
+
+/// Push one cell per element, mapping non-null natives with `f`.
+fn push_prim<T: ArrowPrimitiveType>(
+    arr: &ArrayRef,
+    cells: &mut Vec<Option<Value>>,
+    mut f: impl FnMut(T::Native) -> Result<Value, QvdError>,
+) -> Result<(), QvdError> {
+    let a = arr.as_primitive::<T>();
+    for i in 0..a.len() {
+        cells.push(if a.is_null(i) {
+            None
+        } else {
+            Some(f(a.value(i))?)
+        });
+    }
+    Ok(())
+}
+
+/// An integer as a QVD value: plain when it fits 32 bits, otherwise a dual of
+/// the exact decimal text and its (exact) float number.
+fn integer_value(ctx: &Ctx<'_>, v: i128) -> Result<Value, QvdError> {
+    if let Ok(i) = i32::try_from(v) {
+        return Ok(Value::Int(i));
+    }
+    if v.unsigned_abs() > MAX_EXACT as u128 {
+        return Err(ctx.not_representable(v, "magnitude above 2^53 is not exact as a float"));
+    }
+    Ok(Value::DualFloat(Dual::new(v as f64, v.to_string())))
+}
+
+fn float_serial(micros_since_unix: i128) -> f64 {
+    // One rounding: the exact integer count of microseconds since the Qlik
+    // epoch, divided once. (Dividing first and adding the epoch offset
+    // afterwards rounds twice and can drift by half a microsecond.)
+    let since_qlik = micros_since_unix + i128::from(QLIK_EPOCH_OFFSET) * MICROS_PER_DAY;
+    since_qlik as f64 / MICROS_PER_DAY as f64
+}
+
+fn timestamp_value(micros: i64) -> Value {
+    Value::DualFloat(Dual::new(
+        float_serial(i128::from(micros)),
+        unix_micros_to_iso(micros),
+    ))
+}
+
+fn time_value(ctx: &Ctx<'_>, micros: i128) -> Result<Value, QvdError> {
+    let micros = i64::try_from(micros)
+        .map_err(|_| ctx.not_representable(micros, "time value out of range"))?;
+    Ok(Value::DualFloat(Dual::new(
+        micros as f64 / MICROS_PER_DAY as f64,
+        duration_text(micros),
+    )))
+}
+
+fn to_micros(ctx: &Ctx<'_>, v: i64, per_unit: i64) -> Result<i64, QvdError> {
+    v.checked_mul(per_unit)
+        .ok_or_else(|| ctx.not_representable(v, "timestamp out of range"))
 }
 
 fn convert_array(
+    ctx: &mut Ctx<'_>,
     arr: &ArrayRef,
-    data_type: &DataType,
     cells: &mut Vec<Option<Value>>,
 ) -> Result<(), QvdError> {
     let n = arr.len();
     cells.reserve(n);
-    match data_type {
-            DataType::Int8 => {
-                let a = arr.as_primitive::<Int8Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Int(a.value(i) as i32))
+    match arr.data_type() {
+        DataType::Null => cells.resize(cells.len() + n, None),
+        DataType::Int8 => push_prim::<Int8Type>(arr, cells, |v| Ok(Value::Int(i32::from(v))))?,
+        DataType::Int16 => push_prim::<Int16Type>(arr, cells, |v| Ok(Value::Int(i32::from(v))))?,
+        DataType::Int32 => push_prim::<Int32Type>(arr, cells, |v| Ok(Value::Int(v)))?,
+        DataType::Int64 => push_prim::<Int64Type>(arr, cells, |v| integer_value(ctx, i128::from(v)))?,
+        DataType::UInt8 => push_prim::<UInt8Type>(arr, cells, |v| Ok(Value::Int(i32::from(v))))?,
+        DataType::UInt16 => {
+            push_prim::<UInt16Type>(arr, cells, |v| Ok(Value::Int(i32::from(v))))?
+        }
+        DataType::UInt32 => {
+            push_prim::<UInt32Type>(arr, cells, |v| integer_value(ctx, i128::from(v)))?
+        }
+        DataType::UInt64 => {
+            push_prim::<UInt64Type>(arr, cells, |v| integer_value(ctx, i128::from(v)))?
+        }
+        DataType::Float32 => {
+            push_prim::<Float32Type>(arr, cells, |v| Ok(Value::Float(f64::from(v))))?
+        }
+        DataType::Float64 => push_prim::<Float64Type>(arr, cells, |v| Ok(Value::Float(v)))?,
+        DataType::Decimal128(_, scale) => {
+            let scale = *scale;
+            push_prim::<Decimal128Type>(arr, cells, |v| decimal_value(ctx, v, scale))?
+        }
+        DataType::Decimal256(_, scale) => {
+            let scale = *scale;
+            push_prim::<Decimal256Type>(arr, cells, |v| {
+                let narrow = v
+                    .to_i128()
+                    .ok_or_else(|| ctx.not_representable(v, "decimal too wide"))?;
+                decimal_value(ctx, narrow, scale)
+            })?
+        }
+        DataType::Utf8 => {
+            let a = arr.as_string::<i32>();
+            cells.extend(a.iter().map(|o| o.map(|s| Value::Str(s.to_owned()))));
+        }
+        DataType::LargeUtf8 => {
+            let a = arr.as_string::<i64>();
+            cells.extend(a.iter().map(|o| o.map(|s| Value::Str(s.to_owned()))));
+        }
+        DataType::Utf8View => {
+            let a = arr.as_string_view();
+            cells.extend(a.iter().map(|o| o.map(|s| Value::Str(s.to_owned()))));
+        }
+        DataType::Boolean => {
+            let a = arr.as_boolean();
+            cells.extend(a.iter().map(|o| o.map(|b| Value::Int(i32::from(b)))));
+        }
+        DataType::Date32 => push_prim::<Date32Type>(arr, cells, |d| {
+            Ok(Value::DualInt(Dual::new(
+                d + QLIK_EPOCH_OFFSET,
+                unix_days_to_iso(i64::from(d)),
+            )))
+        })?,
+        DataType::Date64 => push_prim::<Date64Type>(arr, cells, |ms| {
+            if ms.rem_euclid(86_400_000) != 0 {
+                return Err(ctx.not_representable(
+                    ms,
+                    "Date64 value is not a whole number of days; use a timestamp",
+                ));
+            }
+            let d = i32::try_from(ms.div_euclid(86_400_000))
+                .map_err(|_| ctx.not_representable(ms, "date out of range"))?;
+            Ok(Value::DualInt(Dual::new(
+                d + QLIK_EPOCH_OFFSET,
+                unix_days_to_iso(i64::from(d)),
+            )))
+        })?,
+        DataType::Timestamp(unit, tz) => {
+            if let Some(tz) = tz {
+                if !ctx.leniency.allows(LenientCheck::TimezoneToUtc) {
+                    return Err(QvdError::TimezoneNotSupported {
+                        column: ctx.column.to_owned(),
+                        timezone: tz.to_string(),
                     });
                 }
+                ctx.warnings.push(
+                    Warning::new(
+                        WarningKind::TimezoneToUtc,
+                        format!("time zone {tz} dropped; values are stored as UTC wall-clock time"),
+                    )
+                    .in_column(ctx.column),
+                );
             }
-            DataType::Int16 => {
-                let a = arr.as_primitive::<Int16Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Int(a.value(i) as i32))
-                    });
-                }
-            }
-            DataType::Int32 => {
-                let a = arr.as_primitive::<Int32Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Int(a.value(i)))
-                    });
-                }
-            }
-            DataType::Int64 => {
-                let a = arr.as_primitive::<Int64Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        let v = a.value(i);
-                        // Use DualInt if it fits in i32, else encode as string.
-                        if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
-                            Some(Value::DualInt(Dual::new(v as i32, v.to_string())))
-                        } else {
-                            Some(Value::Str(v.to_string()))
-                        }
-                    });
-                }
-            }
-            DataType::UInt8 => {
-                let a = arr.as_primitive::<UInt8Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Int(a.value(i) as i32))
-                    });
-                }
-            }
-            DataType::UInt16 => {
-                let a = arr.as_primitive::<UInt16Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Int(a.value(i) as i32))
-                    });
-                }
-            }
-            DataType::UInt32 => {
-                let a = arr.as_primitive::<UInt32Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        let v = a.value(i);
-                        Some(Value::DualInt(Dual::new(v as i32, v.to_string())))
-                    });
-                }
-            }
-            DataType::UInt64 => {
-                let a = arr.as_primitive::<UInt64Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Str(a.value(i).to_string()))
-                    });
-                }
-            }
-            DataType::Float32 => {
-                let a = arr.as_primitive::<Float32Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Float(a.value(i) as f64))
-                    });
-                }
-            }
-            DataType::Float64 => {
-                let a = arr.as_primitive::<Float64Type>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Float(a.value(i)))
-                    });
-                }
-            }
-            DataType::Utf8 => {
-                let a = arr.as_string::<i32>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Str(a.value(i).to_string()))
-                    });
-                }
-            }
-            DataType::LargeUtf8 => {
-                let a = arr.as_string::<i64>();
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Str(a.value(i).to_string()))
-                    });
-                }
-            }
-            DataType::Boolean => {
-                use arrow_array::BooleanArray;
-                let a =
-                    arr.as_any()
-                        .downcast_ref::<BooleanArray>()
-                        .ok_or_else(|| QvdError::Arrow {
-                            detail: "expected BooleanArray".to_owned(),
-                        })?;
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Int(a.value(i) as i32))
-                    });
-                }
-            }
-            DataType::Date32 => {
-                let a = arr.as_primitive::<Date32Type>();
-                for i in 0..n {
-                    if a.is_null(i) {
-                        cells.push(None);
-                    } else {
-                        let unix_days = a.value(i);
-                        let qlik_days = unix_days + QLIK_EPOCH_OFFSET;
-                        // Format as ISO date string for the text representation.
-                        let text = unix_days_to_iso(unix_days as i64);
-                        cells.push(Some(Value::DualInt(Dual::new(qlik_days, text))));
-                    }
-                }
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                let a = arr.as_primitive::<TimestampMicrosecondType>();
-                for i in 0..n {
-                    if a.is_null(i) {
-                        cells.push(None);
-                    } else {
-                        let micros = a.value(i);
-                        let unix_days = micros as f64 / 86_400_000_000.0;
-                        let qlik_days = unix_days + QLIK_EPOCH_OFFSET as f64;
-                        let text = unix_micros_to_iso(micros);
-                        cells.push(Some(Value::DualFloat(Dual::new(qlik_days, text))));
-                    }
-                }
-            }
-            _ => {
-                // Fallback: use Arrow cast to LargeUtf8.
-                use arrow_cast::cast;
-                use arrow_schema::DataType as DT;
-                let str_arr = cast(arr.as_ref(), &DT::LargeUtf8).map_err(|e| QvdError::Arrow {
-                    detail: e.to_string(),
-                })?;
-                let a = str_arr
-                    .as_any()
-                    .downcast_ref::<arrow_array::LargeStringArray>()
-                    .ok_or_else(|| QvdError::Arrow {
-                        detail: "cast to LargeUtf8 produced unexpected type".to_owned(),
-                    })?;
-                for i in 0..n {
-                    cells.push(if a.is_null(i) {
-                        None
-                    } else {
-                        Some(Value::Str(a.value(i).to_string()))
-                    });
-                }
+            let ctx = &*ctx;
+            match unit {
+                TimeUnit::Second => push_prim::<TimestampSecondType>(arr, cells, |v| {
+                    Ok(timestamp_value(to_micros(ctx, v, 1_000_000)?))
+                })?,
+                TimeUnit::Millisecond => push_prim::<TimestampMillisecondType>(arr, cells, |v| {
+                    Ok(timestamp_value(to_micros(ctx, v, 1_000)?))
+                })?,
+                TimeUnit::Microsecond => push_prim::<TimestampMicrosecondType>(arr, cells, |v| {
+                    Ok(timestamp_value(v))
+                })?,
+                TimeUnit::Nanosecond => push_prim::<TimestampNanosecondType>(arr, cells, |v| {
+                    Ok(timestamp_value(round_nanos_to_micros(v)))
+                })?,
             }
         }
-
+        DataType::Time32(unit) => {
+            let ctx = &*ctx;
+            match unit {
+                TimeUnit::Second => push_prim::<Time32SecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(v) * 1_000_000)
+                })?,
+                _ => push_prim::<Time32MillisecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(v) * 1_000)
+                })?,
+            }
+        }
+        DataType::Time64(unit) => {
+            let ctx = &*ctx;
+            match unit {
+                TimeUnit::Microsecond => {
+                    push_prim::<Time64MicrosecondType>(arr, cells, |v| time_value(ctx, i128::from(v)))?
+                }
+                _ => push_prim::<Time64NanosecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(round_nanos_to_micros(v)))
+                })?,
+            }
+        }
+        DataType::Duration(unit) => {
+            let ctx = &*ctx;
+            match unit {
+                TimeUnit::Second => push_prim::<DurationSecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(v) * 1_000_000)
+                })?,
+                TimeUnit::Millisecond => push_prim::<DurationMillisecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(v) * 1_000)
+                })?,
+                TimeUnit::Microsecond => push_prim::<DurationMicrosecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(v))
+                })?,
+                TimeUnit::Nanosecond => push_prim::<DurationNanosecondType>(arr, cells, |v| {
+                    time_value(ctx, i128::from(round_nanos_to_micros(v)))
+                })?,
+            }
+        }
+        DataType::Dictionary(_, value_type) => {
+            // Unpack the dictionary into its values and convert those.
+            let values = arrow_cast::cast(arr.as_ref(), value_type).map_err(arrow_err)?;
+            return convert_array_after_cast(ctx, &values, cells);
+        }
+        other => {
+            return Err(QvdError::UnsupportedArrowType {
+                column: ctx.column.to_owned(),
+                data_type: other.to_string(),
+            })
+        }
+    }
     Ok(())
+}
+
+/// A dictionary's values may themselves be a dictionary only in exotic data;
+/// unpacking recurses through `convert_array`, which handles that.
+fn convert_array_after_cast(
+    ctx: &mut Ctx<'_>,
+    values: &ArrayRef,
+    cells: &mut Vec<Option<Value>>,
+) -> Result<(), QvdError> {
+    convert_array(ctx, values, cells)
+}
+
+fn round_nanos_to_micros(ns: i64) -> i64 {
+    let q = ns.div_euclid(1000);
+    let r = ns.rem_euclid(1000);
+    if r >= 500 {
+        q + 1
+    } else {
+        q
+    }
+}
+
+fn decimal_value(ctx: &Ctx<'_>, v: i128, scale: i8) -> Result<Value, QvdError> {
+    // Move to a non-negative scale first.
+    let (v, scale) = if scale < 0 {
+        let factor = 10i128
+            .checked_pow(u32::from(scale.unsigned_abs()))
+            .and_then(|f| v.checked_mul(f))
+            .ok_or_else(|| ctx.not_representable(v, "decimal too large"))?;
+        (factor, 0u32)
+    } else {
+        (v, scale as u32)
+    };
+    if v.unsigned_abs() > MAX_EXACT as u128 {
+        return Err(ctx.not_representable(
+            decimal_text(v, scale),
+            "more than 15 significant digits: not exact as a float",
+        ));
+    }
+    if scale > 22 {
+        return Err(ctx.not_representable(decimal_text(v, scale), "scale above 22"));
+    }
+    // Both operands are exact in f64, so the division is the nearest f64 to
+    // the true decimal value.
+    let number = v as f64 / 10f64.powi(scale as i32);
+    Ok(Value::DualFloat(Dual::new(number, decimal_text(v, scale))))
+}
+
+fn decimal_text(v: i128, scale: u32) -> String {
+    let sign = if v < 0 { "-" } else { "" };
+    let digits = v.unsigned_abs().to_string();
+    if scale == 0 {
+        return format!("{sign}{digits}");
+    }
+    let scale = scale as usize;
+    let padded = if digits.len() <= scale {
+        format!("{}{digits}", "0".repeat(scale + 1 - digits.len()))
+    } else {
+        digits
+    };
+    let (int, frac) = padded.split_at(padded.len() - scale);
+    format!("{sign}{int}.{frac}")
+}
+
+fn duration_text(micros: i64) -> String {
+    let sign = if micros < 0 { "-" } else { "" };
+    let abs = micros.unsigned_abs();
+    let total_secs = abs / 1_000_000;
+    let us = abs % 1_000_000;
+    let (h, m, s) = (total_secs / 3_600, (total_secs % 3_600) / 60, total_secs % 60);
+    if us == 0 {
+        format!("{sign}{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{sign}{h:02}:{m:02}:{s:02}.{us:06}")
+    }
 }
 
 fn arrow_type_to_nf(dt: &DataType) -> &'static str {
     match dt {
-        DataType::Date32 => "DATE",
+        DataType::Date32 | DataType::Date64 => "DATE",
         DataType::Timestamp(_, _) => "TIMESTAMP",
         DataType::Duration(_) | DataType::Time32(_) | DataType::Time64(_) => "TIME",
-        DataType::Float32 | DataType::Float64 => "REAL",
+        DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => "REAL",
         DataType::Int8
         | DataType::Int16
         | DataType::Int32

@@ -411,6 +411,29 @@ pub enum QvdError {
         value: f64,
     },
 
+    /// An Arrow timestamp has a time zone, which QVD cannot store.
+    #[error(
+        "column {column:?}: timestamp has time zone {timezone:?}; convert it to a naive timestamp \
+         first, or allow the timezone_to_utc lenient check to store UTC wall-clock time"
+    )]
+    TimezoneNotSupported {
+        /// Column name.
+        column: String,
+        /// The Arrow time zone string.
+        timezone: String,
+    },
+
+    /// A value cannot be stored in QVD without changing it.
+    #[error("column {column:?}: value {value} cannot be stored exactly: {detail}")]
+    ValueNotRepresentable {
+        /// Column name.
+        column: String,
+        /// The value, rendered.
+        value: String,
+        /// Why not.
+        detail: &'static str,
+    },
+
     /// An Arrow type has no defined mapping to a QVD value.
     #[error("column {column:?}: arrow type {data_type} has no QVD mapping")]
     UnsupportedArrowType {
@@ -475,6 +498,8 @@ impl QvdError {
             }
             NonNumericTemporal { .. }
             | TextInNumericColumn { .. }
+            | TimezoneNotSupported { .. }
+            | ValueNotRepresentable { .. }
             | TemporalOutOfRange { .. }
             | CardinalityTooLarge { .. }
             | NulInString

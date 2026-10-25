@@ -111,7 +111,8 @@ def test_leniency_basics():
     assert openqvd.Leniency.strict().checks == frozenset()
     assert not openqvd.Leniency.strict()
     assert openqvd.Leniency.lenient().checks == openqvd.Leniency.CHECKS
-    assert openqvd.Leniency(["non_numeric_temporal"]) == openqvd.Leniency.lenient()
+    assert openqvd.Leniency(openqvd.Leniency.CHECKS) == openqvd.Leniency.lenient()
+    assert openqvd.Leniency(["non_numeric_temporal"]) != openqvd.Leniency.lenient()
     with pytest.raises(ValueError, match="unknown lenient check"):
         openqvd.Leniency(["nope"])
 

@@ -570,6 +570,11 @@ fn schema(path: &str, leniency: Option<Vec<String>>) -> PyResult<PyQvdSchema> {
 ///     file stem of ``path``.
 /// leniency : list[str] | None
 ///     Names of the lenient checks to allow. ``None`` means strict.
+///
+/// Returns
+/// -------
+/// list[ReadWarning]
+///     What a lenient write tolerated.
 #[pyfunction]
 #[pyo3(signature = (data, path, table_name=None, leniency=None))]
 fn write(
@@ -577,7 +582,7 @@ fn write(
     path: &str,
     table_name: Option<&str>,
     leniency: Option<Vec<String>>,
-) -> PyResult<()> {
+) -> PyResult<Vec<PyReadWarning>> {
     let (schema, batches) = batches_from_py(data)?;
     let stem = std::path::Path::new(path)
         .file_stem()
@@ -588,7 +593,7 @@ fn write(
         .with_leniency(parse_leniency(leniency)?);
     let wt = arrow_v::record_batches_to_write_table(schema, &batches, &options).map_err(to_py)?;
     wt.write_to_path(path).map_err(to_py)?;
-    Ok(())
+    Ok(wt.warnings().iter().map(PyReadWarning::from).collect())
 }
 
 // ---------------------------------------------------------------------------

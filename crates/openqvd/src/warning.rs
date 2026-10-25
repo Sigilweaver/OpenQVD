@@ -13,6 +13,9 @@ pub enum WarningKind {
     /// numbers and is exposed as text. See
     /// [`crate::LenientCheck::NonNumericTemporal`].
     NonNumericTemporal,
+    /// A timestamp column with a time zone was written as UTC wall-clock
+    /// time. See [`crate::LenientCheck::TimezoneToUtc`].
+    TimezoneToUtc,
     /// A kind identified only by a code.
     Other(String),
 }
@@ -22,6 +25,7 @@ impl WarningKind {
     pub fn code(&self) -> &str {
         match self {
             WarningKind::NonNumericTemporal => "non_numeric_temporal",
+            WarningKind::TimezoneToUtc => "timezone_to_utc",
             WarningKind::Other(code) => code,
         }
     }

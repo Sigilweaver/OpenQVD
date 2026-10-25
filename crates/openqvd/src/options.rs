@@ -17,16 +17,23 @@ pub enum LenientCheck {
     /// A column typed DATE, TIMESTAMP or TIME holds symbols that are not
     /// finite numbers. Lenient reading exposes the column as text.
     NonNumericTemporal,
+    /// An Arrow timestamp carries a time zone. QVD has none; lenient writing
+    /// stores the UTC wall-clock time and warns.
+    TimezoneToUtc,
 }
 
 impl LenientCheck {
     /// Every check this version of the crate knows about.
-    pub const ALL: &'static [LenientCheck] = &[LenientCheck::NonNumericTemporal];
+    pub const ALL: &'static [LenientCheck] = &[
+        LenientCheck::NonNumericTemporal,
+        LenientCheck::TimezoneToUtc,
+    ];
 
     /// Stable snake_case name, e.g. `"non_numeric_temporal"`.
     pub fn as_str(self) -> &'static str {
         match self {
             LenientCheck::NonNumericTemporal => "non_numeric_temporal",
+            LenientCheck::TimezoneToUtc => "timezone_to_utc",
         }
     }
 }

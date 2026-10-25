@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::error::QvdError;
 use crate::header::NumberFormat;
 use crate::value::{Cell, Value};
+use crate::warning::Warning;
 
 /// A single column of logical values, ready to be written.
 #[derive(Debug, Clone)]
@@ -51,6 +52,7 @@ impl Column {
 pub struct WriteTable {
     name: String,
     columns: Vec<Column>,
+    warnings: Vec<Warning>,
 }
 
 impl WriteTable {
@@ -71,7 +73,22 @@ impl WriteTable {
         Ok(Self {
             name: name.into(),
             columns,
+            warnings: Vec::new(),
         })
+    }
+
+    /// Attach the warnings produced while building this table from other
+    /// data (for example lenient Arrow conversions).
+    #[must_use]
+    pub fn with_warnings(mut self, warnings: Vec<Warning>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+
+    /// Deviations tolerated while building this table. Empty for strict
+    /// conversions.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
 
     /// `<TableName>`.
@@ -136,7 +153,9 @@ fn plan_column(col: &Column) -> Result<ColumnPlan, QvdError> {
                 let idx = if let Some(&i) = index_of.get(&key) {
                     i
                 } else {
-                    let i = symbols.len() as u32;
+                    let i = u32::try_from(symbols.len()).map_err(|_| QvdError::LayoutOverflow {
+                        what: "number of distinct values in a column",
+                    })?;
                     index_of.insert(key, i);
                     symbols.push(v.clone());
                     i
@@ -181,7 +200,10 @@ fn plan_column(col: &Column) -> Result<ColumnPlan, QvdError> {
         .collect();
 
     let symbol_bytes = encode_symbols(&symbols)?;
-    let length_in_body = symbol_bytes.len() as u32;
+    let length_in_body =
+        u32::try_from(symbol_bytes.len()).map_err(|_| QvdError::LayoutOverflow {
+            what: "symbol table size",
+        })?;
 
     Ok(ColumnPlan {
         symbols,
@@ -289,7 +311,9 @@ fn encode(table: &WriteTable) -> Result<Vec<u8>, QvdError> {
                 })?;
     }
     let row_block_offset = body_cursor;
-    let n_rows = table.num_rows() as u32;
+    let n_rows = u32::try_from(table.num_rows()).map_err(|_| QvdError::LayoutOverflow {
+        what: "number of rows",
+    })?;
     let row_block_length =
         record_byte_size
             .checked_mul(n_rows)
