@@ -191,3 +191,19 @@ fn numeric_filter_values_compare_numerically() {
     assert_eq!(sel(ColumnFilter::Eq("three".into())), [3]);
     assert!(sel(ColumnFilter::Eq("1".into())).is_empty());
 }
+
+#[test]
+fn int_filters_do_not_match_floats_outside_i64() {
+    let q = qvd(
+        vec![Column::new(
+            "n",
+            vec![Some(Value::Float(9_223_372_036_854_775_808.0))],
+        )],
+        &ReadOptions::default(),
+    );
+    let sel = |v: i64| {
+        q.select_rows(&[Filter::new("n", ColumnFilter::Eq(v.into()))])
+            .unwrap()
+    };
+    assert!(sel(i64::MAX).is_empty());
+}

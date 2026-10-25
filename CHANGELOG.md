@@ -82,6 +82,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   symbols and the text of duals, NaN matches NaN. `bool` and other Python
   types raise `TypeError` (S2-3). The undocumented `"=="` and `"in"` ops are
   removed.
+- The CLI dropped the final flush error, so `openqvd csv f > /dev/full` exited 0
+  with truncated output. Every command flushes and a failure exits non-zero (a
+  closed pipe is not a failure).
+- `--allow <check>` (repeatable) and `--lenient` on `stat`, `head`, `csv`,
+  `json` and `rewrite` use the lenient checks named in error messages and print
+  each warning to stderr.
+- An `int` filter no longer matches the float 2^63 (the conversion saturated);
+  Python filter dicts reject unknown keys and a `value` on `is_null` /
+  `is_not_null` instead of ignoring them.
 - `openqvd json` printed a NaN or infinite plain float as `null`, identical to a
   real NULL. It prints the string `"NaN"`, `"inf"` or `"-inf"`, as it already did
   for dual floats (S2-7).

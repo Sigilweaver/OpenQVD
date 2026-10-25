@@ -14,7 +14,7 @@
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use openqvd::{Qvd, ReadOptions, Value};
+use openqvd::{Leniency, LenientCheck, Qvd, ReadOptions, Value};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -23,12 +23,19 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let rest: Vec<String> = args.collect();
+    let (leniency, rest) = match extract_leniency(&rest) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("error: {e}\n{}", USAGE);
+            return ExitCode::from(2);
+        }
+    };
     let res = match cmd.as_str() {
-        "stat" => cmd_stat(&rest),
-        "head" => cmd_head(&rest),
-        "csv" => cmd_csv(&rest),
-        "json" => cmd_json(&rest),
-        "rewrite" => cmd_rewrite(&rest),
+        "stat" => cmd_stat(&rest, &leniency),
+        "head" => cmd_head(&rest, &leniency),
+        "csv" => cmd_csv(&rest, &leniency),
+        "json" => cmd_json(&rest, &leniency),
+        "rewrite" => cmd_rewrite(&rest, &leniency),
         "-h" | "--help" | "help" => {
             println!("{}", USAGE);
             return ExitCode::SUCCESS;
@@ -56,11 +63,53 @@ Usage:
   openqvd csv  <file>
   openqvd json <file>
   openqvd rewrite <in> <out>
+
+Reading is strict. To accept a named deviation and get a warning on stderr:
+  --allow <check>   (repeatable) e.g. --allow non_numeric_temporal
+  --lenient         allow every check this version knows
+Checks: non_numeric_temporal, timezone_to_utc, sub_microsecond_precision
 ";
 
-/// Open a file strictly, rendering the error with its source chain.
-fn open_qvd(path: &str) -> Result<Qvd, String> {
-    Qvd::open(path, &ReadOptions::default()).map_err(|e| chain(&e))
+/// Split `--allow <check>` and `--lenient` out of the arguments.
+fn extract_leniency(args: &[String]) -> Result<(Leniency, Vec<String>), String> {
+    let mut leniency = Leniency::strict();
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--lenient" => leniency = Leniency::lenient(),
+            "--allow" => {
+                let name = it.next().ok_or("--allow needs a check name")?;
+                let check: LenientCheck = name.parse().map_err(|e| format!("{e}"))?;
+                leniency = leniency.with(check);
+            }
+            _ => rest.push(a.clone()),
+        }
+    }
+    Ok((leniency, rest))
+}
+
+/// Open a file with the given leniency, rendering the error with its source
+/// chain and printing what a lenient read tolerated to stderr.
+fn open_qvd(path: &str, leniency: &Leniency) -> Result<Qvd, String> {
+    let options = ReadOptions::default().with_leniency(leniency.clone());
+    let q = Qvd::open(path, &options).map_err(|e| chain(&e))?;
+    for w in q.warnings() {
+        eprintln!("warning: {w}");
+    }
+    Ok(q)
+}
+
+/// Flush buffered output and report a failure: an unflushed error would
+/// otherwise be dropped and the command would exit 0 with truncated output.
+/// A closed pipe (`openqvd csv f | head`) is the reader's choice, not an
+/// error.
+fn finish<W: Write>(mut out: W) -> Result<(), String> {
+    match out.flush() {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(format!("writing output: {e}")),
+    }
 }
 
 /// Render an error followed by each of its sources, `: `-separated.
@@ -78,9 +127,9 @@ fn chain(e: &dyn std::error::Error) -> String {
     out
 }
 
-fn cmd_stat(args: &[String]) -> Result<(), String> {
+fn cmd_stat(args: &[String], leniency: &Leniency) -> Result<(), String> {
     let path = args.first().ok_or("stat: missing file")?;
-    let q = open_qvd(path)?;
+    let q = open_qvd(path, leniency)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     writeln!(out, "table: {}", q.table_name()).map_err(|e| e.to_string())?;
     writeln!(out, "rows:  {}", q.num_rows()).map_err(|e| e.to_string())?;
@@ -113,10 +162,10 @@ fn cmd_stat(args: &[String]) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    finish(out)
 }
 
-fn cmd_head(args: &[String]) -> Result<(), String> {
+fn cmd_head(args: &[String], leniency: &Leniency) -> Result<(), String> {
     let path = args.first().ok_or("head: missing file")?;
     let mut n_rows: usize = 10;
     let mut i = 1;
@@ -132,31 +181,31 @@ fn cmd_head(args: &[String]) -> Result<(), String> {
             return Err(format!("head: unknown argument {:?}", args[i]));
         }
     }
-    let q = open_qvd(path)?;
+    let q = open_qvd(path, leniency)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     print_header_row(&mut out, &q)?;
     for row in q.rows().take(n_rows) {
         let row = row.map_err(|e| chain(&e))?;
         print_value_row(&mut out, &row)?;
     }
-    Ok(())
+    finish(out)
 }
 
-fn cmd_csv(args: &[String]) -> Result<(), String> {
+fn cmd_csv(args: &[String], leniency: &Leniency) -> Result<(), String> {
     let path = args.first().ok_or("csv: missing file")?;
-    let q = open_qvd(path)?;
+    let q = open_qvd(path, leniency)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     print_header_row(&mut out, &q)?;
     for row in q.rows() {
         let row = row.map_err(|e| chain(&e))?;
         print_value_row(&mut out, &row)?;
     }
-    Ok(())
+    finish(out)
 }
 
-fn cmd_json(args: &[String]) -> Result<(), String> {
+fn cmd_json(args: &[String], leniency: &Leniency) -> Result<(), String> {
     let path = args.first().ok_or("json: missing file")?;
-    let q = open_qvd(path)?;
+    let q = open_qvd(path, leniency)?;
     let mut out = io::BufWriter::new(io::stdout().lock());
     let names: Vec<&str> = q.fields().iter().map(|f| f.name.as_str()).collect();
     for row in q.rows() {
@@ -175,13 +224,13 @@ fn cmd_json(args: &[String]) -> Result<(), String> {
         }
         writeln!(out, "}}").map_err(|e| e.to_string())?;
     }
-    Ok(())
+    finish(out)
 }
 
-fn cmd_rewrite(args: &[String]) -> Result<(), String> {
+fn cmd_rewrite(args: &[String], leniency: &Leniency) -> Result<(), String> {
     let src = args.first().ok_or("rewrite: missing <in>")?;
     let dst = args.get(1).ok_or("rewrite: missing <out>")?;
-    let q = open_qvd(src)?;
+    let q = open_qvd(src, leniency)?;
     q.to_write_table()
         .and_then(|t| t.write_to_path(dst))
         .map_err(|e| chain(&e))?;

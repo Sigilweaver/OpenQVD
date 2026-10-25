@@ -131,7 +131,11 @@ fn symbol_matches(sym: &Value, target: &FilterValue) -> bool {
             // exactly representable.
             Value::Int(i) => i64::from(*i) == *t,
             Value::DualInt(d) => i64::from(d.number) == *t,
-            _ => number_of(sym).is_some_and(|n| (*t as f64) == n && (*t as f64) as i64 == *t),
+            _ => number_of(sym).is_some_and(|n| {
+                // 2^63 is not an i64; `as` would saturate it onto i64::MAX.
+                const TWO_63: f64 = 9_223_372_036_854_775_808.0;
+                n.fract() == 0.0 && (-TWO_63..TWO_63).contains(&n) && n as i64 == *t
+            }),
         },
         FilterValue::Float(t) => {
             number_of(sym).is_some_and(|n| n == *t || (n.is_nan() && t.is_nan()))

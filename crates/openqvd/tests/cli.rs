@@ -74,3 +74,62 @@ fn tempdir() -> std::path::PathBuf {
     std::fs::create_dir_all(&d).unwrap();
     d
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_write_exits_nonzero() {
+    let path = sample(&tempdir());
+    for cmd in ["csv", "json", "stat", "head"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_openqvd"))
+            .args([cmd, &path])
+            .stdout(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/full")
+                    .unwrap(),
+            )
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{cmd} exited 0 with a full disk");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("writing output"),
+            "{cmd}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+fn date_text_file(dir: &std::path::Path) -> String {
+    use openqvd::NumberFormat;
+    let mut c = Column::new(
+        "d",
+        vec![Some(Value::Float(45_000.0)), Some(Value::Str("N/A".into()))],
+    );
+    c.number_format = NumberFormat::new("DATE");
+    let p = dir.join("date_text.qvd");
+    WriteTable::new("t", vec![c])
+        .unwrap()
+        .write_to_path(&p)
+        .unwrap();
+    p.to_str().unwrap().to_owned()
+}
+
+#[test]
+fn lenient_flags_reach_the_reader() {
+    let path = date_text_file(&tempdir());
+    let (ok, _, err) = run(&["csv", &path]);
+    assert!(!ok);
+    assert!(err.contains("non_numeric_temporal"), "{err}");
+    for flags in [
+        vec!["csv", "--lenient", &path],
+        vec!["csv", &path, "--allow", "non_numeric_temporal"],
+    ] {
+        let (ok, out, err) = run(&flags);
+        assert!(ok, "{flags:?}: {err}");
+        assert!(out.contains("N/A"), "{out}");
+        assert!(err.contains("warning: non_numeric_temporal"), "{err}");
+    }
+    let (ok, _, err) = run(&["csv", "--allow", "bogus", &path]);
+    assert!(!ok);
+    assert!(err.contains("unknown lenient check"), "{err}");
+}

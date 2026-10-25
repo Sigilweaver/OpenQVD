@@ -395,6 +395,16 @@ fn parse_py_filters(
                 "each filter must be a dict with 'column', 'op', and optionally 'value'",
             )
         })?;
+        for key in dict.keys() {
+            let key: String = key
+                .extract()
+                .map_err(|_| PyValueError::new_err("filter dict keys must be strings"))?;
+            if !matches!(key.as_str(), "column" | "op" | "value") {
+                return Err(PyValueError::new_err(format!(
+                    "unknown filter key {key:?}; use 'column', 'op' and 'value'"
+                )));
+            }
+        }
         let column: String = dict
             .get_item("column")?
             .ok_or_else(|| PyValueError::new_err("filter dict missing 'column' key"))?
@@ -423,8 +433,18 @@ fn parse_py_filters(
             }
             "is_in" => openqvd::ColumnFilter::IsIn(values("is_in")?),
             "not_in" => openqvd::ColumnFilter::NotIn(values("not_in")?),
-            "is_null" => openqvd::ColumnFilter::IsNull,
-            "is_not_null" => openqvd::ColumnFilter::IsNotNull,
+            "is_null" | "is_not_null" => {
+                if dict.contains("value")? {
+                    return Err(PyValueError::new_err(format!(
+                        "filter '{op}' takes no 'value'"
+                    )));
+                }
+                if op == "is_null" {
+                    openqvd::ColumnFilter::IsNull
+                } else {
+                    openqvd::ColumnFilter::IsNotNull
+                }
+            }
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown filter op {other:?}; use 'eq', 'is_in', 'not_in', 'is_null', or 'is_not_null'"

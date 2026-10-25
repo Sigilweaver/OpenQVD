@@ -63,3 +63,10 @@ def test_undocumented_aliases_are_gone(qvd):
     for op in ("==", "in"):
         with pytest.raises(ValueError, match="unknown filter op"):
             openqvd.read(qvd, filters=[{"column": "i", "op": op, "value": 1}])
+
+
+def test_misspelled_keys_and_stray_values_raise(qvd):
+    with pytest.raises(ValueError, match="unknown filter key"):
+        openqvd.read(qvd, filters=[{"column": "i", "op": "eq", "valeu": 1}])
+    with pytest.raises(ValueError, match="takes no 'value'"):
+        openqvd.read(qvd, filters=[{"column": "i", "op": "is_null", "value": 5}])

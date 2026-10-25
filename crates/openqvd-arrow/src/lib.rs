@@ -10,6 +10,10 @@
 //! The version-independent option type [`BatchOptions`] lives at the crate
 //! root. A new Arrow major is a new feature and module; existing modules do
 //! not change.
+//!
+//! Every module is built from the same source file (`imp.rs`), so an Arrow
+//! major whose API differs needs `cfg` branches inside that file, not a
+//! second copy.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
