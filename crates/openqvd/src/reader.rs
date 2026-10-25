@@ -213,7 +213,13 @@ impl Qvd {
     /// (SPEC 1.4.3), and every decoded field's symbol index must exist.
     fn validate_rows(&self, spans: &[(u64, u64, usize)]) -> Result<(), QvdError> {
         let rbs = self.header.record_byte_size as usize;
-        let n = self.header.no_of_records as usize;
+        let mut n = self.header.no_of_records as usize;
+        if rbs == 0 {
+            // Zero-width records carry no bits: every row is the same, so one
+            // row proves the lot. (A crafted NoOfRecords of 2^32 - 1 in a
+            // 600-byte file used to cost seconds here.)
+            n = n.min(1);
+        }
         if n == 0 {
             return Ok(());
         }

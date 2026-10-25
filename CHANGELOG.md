@@ -84,6 +84,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - A symbol index outside its table became a NULL in `rows()`, `to_write_table`,
   Arrow conversion and the CLI. Every decoded column's indices are checked once
   when the file opens, so the corruption is an error everywhere (S2-1).
+- Validation no longer scales with `NoOfRecords` when records are zero bytes
+  wide (a crafted 600-byte file declaring 2^32 - 1 rows took seconds).
 - Bits in a record that no field claims must be zero (S3-1), and bytes after the
   row block are an error (S3-2). Both detect a misread layout.
 - XML entity references and CDATA in the header were silently deleted:

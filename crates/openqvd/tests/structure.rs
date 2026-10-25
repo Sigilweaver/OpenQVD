@@ -227,3 +227,18 @@ fn undecoded_columns_are_not_validated() {
     .unwrap();
     assert_eq!(q.num_rows(), 2);
 }
+
+#[test]
+fn a_huge_record_count_with_zero_width_records_opens_quickly() {
+    // Constant columns store no bits; NoOfRecords alone is 2^32 - 1.
+    let mut f = one(0, 0);
+    f.symbols = 1;
+    f.length = 3;
+    let t = std::time::Instant::now();
+    let q = open(file(&[f], 0, u32::MAX, 3, &[0x04, b'x', 0], &[])).unwrap();
+    assert_eq!(q.num_rows(), u32::MAX);
+    assert!(
+        t.elapsed().as_secs() < 2,
+        "validation scaled with NoOfRecords"
+    );
+}
