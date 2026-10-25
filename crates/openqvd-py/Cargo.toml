@@ -24,7 +24,7 @@ unsafe_code = "allow"
 openqvd = { version = "2.0.0", path = "../openqvd" }
 openqvd-arrow = { version = "2.0.0", path = "../openqvd-arrow", features = ["arrow-60"] }
 # One stable wheel per platform: abi3 wheels work on every CPython >= 3.10.
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }
 # Private to the extension: Arrow never appears in the Python API. Moving to
 # a newer Arrow major means changing these three lines and the feature above.
 arrow-array = { version = "60", features = ["ffi"] }
