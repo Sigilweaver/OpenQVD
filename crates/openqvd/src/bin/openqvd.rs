@@ -237,7 +237,9 @@ fn write_json_value<W: Write>(out: &mut W, cell: &Option<Value>) -> Result<(), S
             if f.is_finite() {
                 write!(out, "{f}").map_err(|e| e.to_string())?
             } else {
-                write!(out, "null").map_err(|e| e.to_string())?
+                // JSON has no NaN/Infinity; a string keeps them distinct
+                // from a real NULL.
+                write!(out, "\"{f}\"").map_err(|e| e.to_string())?
             }
         }
         Some(Value::Str(s)) => {

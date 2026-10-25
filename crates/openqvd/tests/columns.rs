@@ -157,3 +157,37 @@ fn rows_and_to_write_table_refuse_undecoded_columns() {
     // The decoded column is still readable.
     assert_eq!(q.column(0).unwrap().len(), 2);
 }
+
+#[test]
+fn numeric_filter_values_compare_numerically() {
+    let q = qvd(
+        vec![Column::new(
+            "n",
+            vec![
+                Some(Value::Float(1.0)),
+                Some(Value::Int(2)),
+                Some(Value::Float(1e20)),
+                Some(Value::DualInt(Dual::new(3, "three"))),
+                Some(Value::Float(f64::NAN)),
+                None,
+            ],
+        )],
+        &ReadOptions::default(),
+    );
+    let sel = |p: ColumnFilter| q.select_rows(&[Filter::new("n", p)]).unwrap();
+    // 1.0 (float) vs 1 (int) and the reverse: the old string comparison
+    // rendered them differently and matched nothing.
+    assert_eq!(sel(ColumnFilter::Eq(1i64.into())), [0]);
+    assert_eq!(sel(ColumnFilter::Eq(1.0f64.into())), [0]);
+    assert_eq!(sel(ColumnFilter::Eq(2.0f64.into())), [1]);
+    assert_eq!(sel(ColumnFilter::Eq(1e20f64.into())), [2]);
+    assert_eq!(sel(ColumnFilter::Eq(3i64.into())), [3]);
+    assert_eq!(sel(ColumnFilter::Eq(f64::NAN.into())), [4]);
+    assert_eq!(
+        sel(ColumnFilter::IsIn(vec![1i64.into(), 2.0f64.into()])),
+        [0, 1]
+    );
+    // Text matches text (including the text of a dual), never a number.
+    assert_eq!(sel(ColumnFilter::Eq("three".into())), [3]);
+    assert!(sel(ColumnFilter::Eq("1".into())).is_empty());
+}

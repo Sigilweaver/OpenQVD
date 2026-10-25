@@ -346,18 +346,47 @@ fn batches_from_py(obj: &Bound<'_, PyAny>) -> PyResult<(SchemaRef, Vec<RecordBat
 // Filter helpers
 // ---------------------------------------------------------------------------
 
+/// A Python filter value: ``int``, ``float`` or ``str``. ``bool`` and every
+/// other type are rejected rather than matched by coincidence of their text.
+fn py_filter_value(v: &Bound<'_, PyAny>) -> PyResult<openqvd::FilterValue> {
+    use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
+    if v.is_instance_of::<PyBool>() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "filter values must be int, float or str, not bool",
+        ));
+    }
+    if v.is_instance_of::<PyInt>() {
+        return v
+            .extract::<i64>()
+            .map(openqvd::FilterValue::Int)
+            .map_err(|_| {
+                PyValueError::new_err(format!("filter integer {v} does not fit in 64 bits"))
+            });
+    }
+    if v.is_instance_of::<PyFloat>() {
+        return Ok(openqvd::FilterValue::Float(v.extract::<f64>()?));
+    }
+    if v.is_instance_of::<PyString>() {
+        return Ok(openqvd::FilterValue::Str(v.extract::<String>()?));
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(format!(
+        "filter values must be int, float or str, not {}",
+        v.get_type().name()?
+    )))
+}
+
 /// Convert a Python filter dict list into Rust `Filter` objects.
 ///
 /// Expected format per filter dict:
 ///   {"column": "col_name", "op": "eq"|"is_in"|"not_in"|"is_null"|"is_not_null", "value": ...}
 ///
-/// `value` is a `str` for "eq", a `list[str]` for "is_in"/"not_in",
-/// and unused/absent for "is_null"/"is_not_null".
+/// `value` is an `int`, `float` or `str` for "eq", a list of those for
+/// "is_in"/"not_in", and absent for "is_null"/"is_not_null".
 fn parse_py_filters(
     _py: Python<'_>,
     filters: &Bound<'_, pyo3::types::PyList>,
 ) -> PyResult<Vec<openqvd::Filter>> {
-    use pyo3::types::{PyDict, PyString};
+    use pyo3::types::PyDict;
 
     let mut result = Vec::with_capacity(filters.len());
     for item in filters.iter() {
@@ -374,50 +403,26 @@ fn parse_py_filters(
             .get_item("op")?
             .ok_or_else(|| PyValueError::new_err("filter dict missing 'op' key"))?
             .extract()?;
+        let values = |name: &str| -> PyResult<Vec<openqvd::FilterValue>> {
+            let obj = dict.get_item("value")?.ok_or_else(|| {
+                PyValueError::new_err(format!("filter '{name}' requires a 'value' key"))
+            })?;
+            if obj.is_instance_of::<pyo3::types::PyString>() {
+                return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                    "filter '{name}' needs a list of values, not a single string"
+                )));
+            }
+            obj.try_iter()?.map(|v| py_filter_value(&v?)).collect()
+        };
         let predicate = match op.as_str() {
-            "eq" | "==" => {
-                let val: String = dict
+            "eq" => {
+                let val = dict
                     .get_item("value")?
-                    .ok_or_else(|| PyValueError::new_err("filter 'eq' requires a 'value' key"))?
-                    .str()?
-                    .to_string();
-                openqvd::ColumnFilter::Eq(val)
+                    .ok_or_else(|| PyValueError::new_err("filter 'eq' requires a 'value' key"))?;
+                openqvd::ColumnFilter::Eq(py_filter_value(&val)?)
             }
-            "is_in" | "in" => {
-                let vals_obj = dict.get_item("value")?.ok_or_else(|| {
-                    PyValueError::new_err("filter 'is_in' requires a 'value' key")
-                })?;
-                let vals: Vec<String> = vals_obj
-                    .try_iter()?
-                    .map(|v| {
-                        let v = v?;
-                        // Try str() first, fall back to repr
-                        if let Ok(s) = v.cast::<PyString>() {
-                            Ok(s.to_string())
-                        } else {
-                            Ok(v.str()?.to_string())
-                        }
-                    })
-                    .collect::<PyResult<_>>()?;
-                openqvd::ColumnFilter::IsIn(vals)
-            }
-            "not_in" => {
-                let vals_obj = dict.get_item("value")?.ok_or_else(|| {
-                    PyValueError::new_err("filter 'not_in' requires a 'value' key")
-                })?;
-                let vals: Vec<String> = vals_obj
-                    .try_iter()?
-                    .map(|v| {
-                        let v = v?;
-                        if let Ok(s) = v.cast::<PyString>() {
-                            Ok(s.to_string())
-                        } else {
-                            Ok(v.str()?.to_string())
-                        }
-                    })
-                    .collect::<PyResult<_>>()?;
-                openqvd::ColumnFilter::NotIn(vals)
-            }
+            "is_in" => openqvd::ColumnFilter::IsIn(values("is_in")?),
+            "not_in" => openqvd::ColumnFilter::NotIn(values("not_in")?),
             "is_null" => openqvd::ColumnFilter::IsNull,
             "is_not_null" => openqvd::ColumnFilter::IsNotNull,
             other => {
@@ -446,8 +451,9 @@ fn parse_py_filters(
 /// filters : list[dict] | None
 ///     Predicate pushdown filters. Each dict has keys ``column`` (str),
 ///     ``op`` (one of ``"eq"``, ``"is_in"``, ``"not_in"``, ``"is_null"``,
-///     ``"is_not_null"``), and ``value`` (str for eq, list[str] for
-///     is_in/not_in, absent for null checks). Filters are resolved against
+///     ``"is_not_null"``), and ``value`` (int, float or str for eq, a list of
+///     those for is_in/not_in, absent for null checks). Numbers compare
+///     numerically, strings compare with text. Filters are resolved against
 ///     the column symbol table before row iteration, so non-matching rows
 ///     are skipped without full decoding.
 /// leniency : list[str] | None
