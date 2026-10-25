@@ -143,9 +143,6 @@ impl ColumnData {
     }
 }
 
-/// Microseconds per day.
-const MICROS_PER_DAY: f64 = 86_400_000_000.0;
-
 /// The finite numeric value of a symbol, `None` for text and for NaN/Inf.
 fn finite_number(v: &Value) -> Option<f64> {
     let n = match v {
@@ -295,35 +292,18 @@ fn value_as_str(v: &Value) -> String {
     }
 }
 
-/// Whole days since 1970-01-01 for a Qlik day serial (floor: a serial of
-/// -0.5 is the day before the epoch day 0).
 fn qlik_days_to_unix(field: &str, n: f64) -> Result<i32, QvdError> {
-    let out_of_range = || QvdError::TemporalOutOfRange {
+    crate::serial::serial_to_unix_days(n).ok_or_else(|| QvdError::TemporalOutOfRange {
         field: field.to_owned(),
         value: n,
-    };
-    let days = n.floor();
-    if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&days) {
-        return Err(out_of_range());
-    }
-    (days as i32)
-        .checked_sub(QLIK_EPOCH_OFFSET)
-        .ok_or_else(out_of_range)
+    })
 }
 
-/// Microseconds for a (fractional) number of days, rounded to the nearest
-/// microsecond. Truncating instead lands 1 us early for about 30% of whole
-/// seconds because a day count is not exactly representable.
 fn days_to_micros(field: &str, days: f64) -> Result<i64, QvdError> {
-    let micros = (days * MICROS_PER_DAY).round();
-    // The upper bound is exclusive: 2^63 as f64 is just out of range.
-    if !micros.is_finite() || micros < i64::MIN as f64 || micros >= i64::MAX as f64 {
-        return Err(QvdError::TemporalOutOfRange {
-            field: field.to_owned(),
-            value: days,
-        });
-    }
-    Ok(micros as i64)
+    crate::serial::duration_days_to_micros(days).ok_or_else(|| QvdError::TemporalOutOfRange {
+        field: field.to_owned(),
+        value: days,
+    })
 }
 
 fn convert(field: &str, dtype: ColumnType, symbols: &[Value]) -> Result<ColumnValues, QvdError> {

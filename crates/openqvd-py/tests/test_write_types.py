@@ -92,3 +92,27 @@ def test_polars_datetime_ns_and_decimal(tmp_path):
     t = openqvd.read(p).to_pyarrow()
     assert t.column("t").to_pylist() == [dt.datetime(2023, 11, 14, 22, 13, 20)]
     assert t.column("d").to_pylist() == [1.5]
+
+
+def test_sub_microsecond_digits_are_an_error_unless_rounding_is_allowed(tmp_path):
+    arr = pa.array([1_000_000_000_000_000_001], pa.timestamp("ns"))
+    with pytest.raises(openqvd.QvdConversionError, match="sub_microsecond_precision"):
+        openqvd.write(pa.table({"c": arr}), tmp_path / "ns.qvd")
+    with pytest.warns(openqvd.QvdWarning, match="sub_microsecond_precision"):
+        openqvd.write(
+            pa.table({"c": arr}),
+            tmp_path / "ns.qvd",
+            leniency=["sub_microsecond_precision"],
+        )
+
+
+def test_out_of_calendar_dates_and_duplicate_names_are_errors(tmp_path):
+    with pytest.raises(openqvd.QvdConversionError):
+        openqvd.write(
+            pa.table({"c": pa.array([2**31 - 1], pa.date32())}), tmp_path / "d.qvd"
+        )
+    dup = pa.Table.from_arrays(
+        [pa.array([1]), pa.array([2])], schema=pa.schema([("a", pa.int64()), ("a", pa.int64())])
+    )
+    with pytest.raises(openqvd.QvdSchemaError, match="duplicate column"):
+        openqvd.write(dup, tmp_path / "dup.qvd")

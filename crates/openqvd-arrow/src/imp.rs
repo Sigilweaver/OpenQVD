@@ -138,13 +138,22 @@ pub fn record_batch_to_write_table(
 /// | Utf8, LargeUtf8, Utf8View | string |
 /// | Boolean | integer 0/1 |
 /// | Date32, Date64 (whole days) | dual (day serial, ISO date) |
-/// | Timestamp(any unit) | dual (day serial, ISO date-time); a time zone is an error unless `timezone_to_utc` is allowed |
-/// | Time32, Time64, Duration | dual (fraction of a day, `h:mm:ss`) |
+/// | Date32, Date64 | only years 0001 to 9999 |
+/// | Timestamp(any unit) | dual (day serial, ISO date-time), years 0001 to 9999; a time zone is an error unless `timezone_to_utc` is allowed; nanosecond digits are an error unless `sub_microsecond_precision` is allowed |
+/// | Time32, Time64 | dual (fraction of a day, `h:mm:ss`), format `TIME` |
+/// | Duration | dual (fraction of a day, `h:mm:ss`, hours may exceed 24), format `INTERVAL` |
 /// | Dictionary | its values, converted by the row above |
 /// | Null | NULL |
 ///
-/// Day serials are `f64`, so timestamps resolve to about a microsecond;
-/// nanoseconds are rounded to the nearest microsecond.
+/// Day serials are `f64`, so timestamps resolve to about a microsecond near
+/// 1970 and to tens of microseconds near year 9999.
+///
+/// Reading the result back does not always give the Arrow type that went in
+/// (the values are exact): an Int64 column with any value beyond 32 bits is
+/// read as Float64, Decimal as Float64 (the exact text is stored but the
+/// reader returns the number), Float32 as the widened f64, and a dictionary
+/// column carries no format hint, so a dictionary of timestamps reads back
+/// as floats.
 ///
 /// Anything tolerated because of `options.leniency` is listed in
 /// [`WriteTable::warnings`].
@@ -167,6 +176,7 @@ pub fn record_batches_to_write_table(
                 column: field.name(),
                 leniency: &options.leniency,
                 warnings: &mut warnings,
+                rounded: std::cell::Cell::new(false),
             };
             convert_array(&mut ctx, batch.column(col_idx), &mut cells)?;
         }
@@ -183,6 +193,8 @@ struct Ctx<'a> {
     column: &'a str,
     leniency: &'a Leniency,
     warnings: &'a mut Vec<Warning>,
+    /// Set when a nanosecond value was rounded (lenient only).
+    rounded: std::cell::Cell<bool>,
 }
 
 impl Ctx<'_> {
@@ -240,20 +252,66 @@ fn float_serial(micros_since_unix: i128) -> f64 {
     since_qlik as f64 / MICROS_PER_DAY as f64
 }
 
-fn timestamp_value(micros: i64) -> Value {
-    Value::DualFloat(Dual::new(
-        float_serial(i128::from(micros)),
-        unix_micros_to_iso(micros),
-    ))
+/// First and last days (since 1970-01-01) the writer accepts: 0001-01-01 to
+/// 9999-12-31. Outside that the ISO text is not a date, and far from 1970 an
+/// f64 day serial no longer resolves a microsecond.
+const MIN_UNIX_DAY: i64 = -719_162;
+const MAX_UNIX_DAY: i64 = 2_932_896;
+
+/// A timestamp as a (serial, ISO text) dual. The serial is an f64, so far
+/// from 1970 it resolves only to tens of microseconds; the value must still
+/// be one the reader accepts, so it is checked by reading it back.
+fn timestamp_value(ctx: &Ctx<'_>, micros: i64) -> Result<Value, QvdError> {
+    let day = i128::from(micros).div_euclid(MICROS_PER_DAY);
+    if day < i128::from(MIN_UNIX_DAY) || day > i128::from(MAX_UNIX_DAY) {
+        return Err(ctx.not_representable(micros, "timestamp outside years 0001 to 9999"));
+    }
+    let serial = float_serial(i128::from(micros));
+    if openqvd::serial::serial_to_unix_micros(serial).is_none() {
+        return Err(ctx.not_representable(micros, "timestamp outside the readable range"));
+    }
+    Ok(Value::DualFloat(Dual::new(serial, unix_micros_to_iso(micros))))
 }
 
 fn time_value(ctx: &Ctx<'_>, micros: i128) -> Result<Value, QvdError> {
     let micros = i64::try_from(micros)
         .map_err(|_| ctx.not_representable(micros, "time value out of range"))?;
-    Ok(Value::DualFloat(Dual::new(
-        micros as f64 / MICROS_PER_DAY as f64,
-        duration_text(micros),
+    let days = micros as f64 / MICROS_PER_DAY as f64;
+    if openqvd::serial::duration_days_to_micros(days).is_none() {
+        return Err(ctx.not_representable(micros, "time value outside the readable range"));
+    }
+    Ok(Value::DualFloat(Dual::new(days, duration_text(micros))))
+}
+
+fn date_value(ctx: &Ctx<'_>, unix_days: i32) -> Result<Value, QvdError> {
+    if !(MIN_UNIX_DAY..=MAX_UNIX_DAY).contains(&i64::from(unix_days)) {
+        return Err(ctx.not_representable(unix_days, "date outside years 0001 to 9999"));
+    }
+    let serial = unix_days
+        .checked_add(QLIK_EPOCH_OFFSET)
+        .ok_or_else(|| ctx.not_representable(unix_days, "date out of range"))?;
+    Ok(Value::DualInt(Dual::new(
+        serial,
+        unix_days_to_iso(i64::from(unix_days)),
     )))
+}
+
+/// Nanoseconds to microseconds. A remainder is a value the format cannot
+/// hold: an error, or with the `sub_microsecond_precision` leniency a
+/// rounding that is reported once per column.
+fn nanos_to_micros(ctx: &Ctx<'_>, ns: i64) -> Result<i64, QvdError> {
+    if ns.rem_euclid(1000) == 0 {
+        return Ok(ns.div_euclid(1000));
+    }
+    if !ctx.leniency.allows(LenientCheck::SubMicrosecondPrecision) {
+        return Err(ctx.not_representable(
+            ns,
+            "nanosecond digits below the microsecond; allow the sub_microsecond_precision \
+             lenient check to round",
+        ));
+    }
+    ctx.rounded.set(true);
+    Ok(round_nanos_to_micros(ns))
 }
 
 fn to_micros(ctx: &Ctx<'_>, v: i64, per_unit: i64) -> Result<i64, QvdError> {
@@ -317,13 +375,13 @@ fn convert_array(
             let a = arr.as_boolean();
             cells.extend(a.iter().map(|o| o.map(|b| Value::Int(i32::from(b)))));
         }
-        DataType::Date32 => push_prim::<Date32Type>(arr, cells, |d| {
-            Ok(Value::DualInt(Dual::new(
-                d + QLIK_EPOCH_OFFSET,
-                unix_days_to_iso(i64::from(d)),
-            )))
-        })?,
-        DataType::Date64 => push_prim::<Date64Type>(arr, cells, |ms| {
+        DataType::Date32 => {
+            let ctx = &*ctx;
+            push_prim::<Date32Type>(arr, cells, |d| date_value(ctx, d))?
+        }
+        DataType::Date64 => {
+            let ctx = &*ctx;
+            push_prim::<Date64Type>(arr, cells, |ms| {
             if ms.rem_euclid(86_400_000) != 0 {
                 return Err(ctx.not_representable(
                     ms,
@@ -332,11 +390,9 @@ fn convert_array(
             }
             let d = i32::try_from(ms.div_euclid(86_400_000))
                 .map_err(|_| ctx.not_representable(ms, "date out of range"))?;
-            Ok(Value::DualInt(Dual::new(
-                d + QLIK_EPOCH_OFFSET,
-                unix_days_to_iso(i64::from(d)),
-            )))
-        })?,
+            date_value(ctx, d)
+        })?
+        }
         DataType::Timestamp(unit, tz) => {
             if let Some(tz) = tz {
                 if !ctx.leniency.allows(LenientCheck::TimezoneToUtc) {
@@ -356,16 +412,16 @@ fn convert_array(
             let ctx = &*ctx;
             match unit {
                 TimeUnit::Second => push_prim::<TimestampSecondType>(arr, cells, |v| {
-                    Ok(timestamp_value(to_micros(ctx, v, 1_000_000)?))
+                    timestamp_value(ctx, to_micros(ctx, v, 1_000_000)?)
                 })?,
                 TimeUnit::Millisecond => push_prim::<TimestampMillisecondType>(arr, cells, |v| {
-                    Ok(timestamp_value(to_micros(ctx, v, 1_000)?))
+                    timestamp_value(ctx, to_micros(ctx, v, 1_000)?)
                 })?,
                 TimeUnit::Microsecond => push_prim::<TimestampMicrosecondType>(arr, cells, |v| {
-                    Ok(timestamp_value(v))
+                    timestamp_value(ctx, v)
                 })?,
                 TimeUnit::Nanosecond => push_prim::<TimestampNanosecondType>(arr, cells, |v| {
-                    Ok(timestamp_value(round_nanos_to_micros(v)))
+                    timestamp_value(ctx, nanos_to_micros(ctx, v)?)
                 })?,
             }
         }
@@ -387,7 +443,7 @@ fn convert_array(
                     push_prim::<Time64MicrosecondType>(arr, cells, |v| time_value(ctx, i128::from(v)))?
                 }
                 _ => push_prim::<Time64NanosecondType>(arr, cells, |v| {
-                    time_value(ctx, i128::from(round_nanos_to_micros(v)))
+                    time_value(ctx, i128::from(nanos_to_micros(ctx, v)?))
                 })?,
             }
         }
@@ -404,7 +460,7 @@ fn convert_array(
                     time_value(ctx, i128::from(v))
                 })?,
                 TimeUnit::Nanosecond => push_prim::<DurationNanosecondType>(arr, cells, |v| {
-                    time_value(ctx, i128::from(round_nanos_to_micros(v)))
+                    time_value(ctx, i128::from(nanos_to_micros(ctx, v)?))
                 })?,
             }
         }
@@ -419,6 +475,20 @@ fn convert_array(
                 data_type: other.to_string(),
             })
         }
+    }
+    if ctx.rounded.get()
+        && !ctx
+            .warnings
+            .iter()
+            .any(|w| w.kind == WarningKind::SubMicrosecondPrecision && w.column.as_deref() == Some(ctx.column))
+    {
+        ctx.warnings.push(
+            Warning::new(
+                WarningKind::SubMicrosecondPrecision,
+                "nanosecond values were rounded to the nearest microsecond",
+            )
+            .in_column(ctx.column),
+        );
     }
     Ok(())
 }
@@ -502,7 +572,9 @@ fn arrow_type_to_nf(dt: &DataType) -> &'static str {
     match dt {
         DataType::Date32 | DataType::Date64 => "DATE",
         DataType::Timestamp(_, _) => "TIMESTAMP",
-        DataType::Duration(_) | DataType::Time32(_) | DataType::Time64(_) => "TIME",
+        DataType::Time32(_) | DataType::Time64(_) => "TIME",
+        // Durations may exceed a day; a TIME column is a time of day.
+        DataType::Duration(_) => "INTERVAL",
         DataType::Float32
         | DataType::Float64
         | DataType::Decimal128(_, _)

@@ -234,6 +234,99 @@ macro_rules! suite {
             }
 
             #[test]
+            fn nanosecond_digits_are_an_error_unless_rounding_is_allowed() {
+                let a: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+                    1_000_000_000_000_000_001i64,
+                    1_000_000_000_000_000_499,
+                ]));
+                let e = write(a.clone()).unwrap_err();
+                assert!(
+                    matches!(&e, QvdError::ValueNotRepresentable { detail, .. } if detail.contains("sub_microsecond_precision")),
+                    "{e:?}"
+                );
+                // Whole microseconds are fine.
+                write(Arc::new(TimestampNanosecondArray::from(vec![1_000i64, 2_000])) as ArrayRef)
+                    .unwrap();
+                let o = WriteOptions::new().with_leniency(
+                    Leniency::strict().with(LenientCheck::SubMicrosecondPrecision),
+                );
+                let t = $module::record_batch_to_write_table(&batch(a), &o).unwrap();
+                assert_eq!(t.warnings().len(), 1, "one warning per column");
+                assert_eq!(t.warnings()[0].kind, WarningKind::SubMicrosecondPrecision);
+                // Time64 and Duration in nanoseconds follow the same rule.
+                for a in [
+                    Arc::new(arrow_array::Time64NanosecondArray::from(vec![1i64])) as ArrayRef,
+                    Arc::new(arrow_array::DurationNanosecondArray::from(vec![1i64])) as ArrayRef,
+                ] {
+                    assert!(matches!(
+                        write(a).unwrap_err(),
+                        QvdError::ValueNotRepresentable { .. }
+                    ));
+                }
+            }
+
+            #[test]
+            fn dates_and_timestamps_the_reader_would_reject_are_not_written() {
+                for a in [
+                    Arc::new(arrow_array::Date32Array::from(vec![i32::MAX])) as ArrayRef,
+                                        Arc::new(TimestampMicrosecondArray::from(vec![i64::MAX])) as ArrayRef,
+                    Arc::new(TimestampMicrosecondArray::from(vec![i64::MIN])) as ArrayRef,
+                    Arc::new(DurationSecondArray::from(vec![i64::MAX])) as ArrayRef,
+                ] {
+                    let e = write(a).unwrap_err();
+                    assert!(matches!(e, QvdError::ValueNotRepresentable { .. }), "{e:?}");
+                }
+                // The calendar bounds are accepted and read back strictly.
+                for d in [-719_162, 2_932_896] {
+                    let q = write(Arc::new(arrow_array::Date32Array::from(vec![d])) as ArrayRef)
+                        .unwrap();
+                    assert_eq!(q.column(0).unwrap().symbols, ColumnValues::Date32(vec![d]));
+                }
+                for d in [-719_163, 2_932_897] {
+                    assert!(write(Arc::new(arrow_array::Date32Array::from(vec![d])) as ArrayRef)
+                        .is_err());
+                }
+                // Everything the writer accepts re-reads in strict mode.
+                let probes = [0i64, 1, -1, 86_400_000_000, 1 << 40, 1 << 55, (1 << 62) + 12_345, -(1 << 61), 253_402_300_799_999_999, -62_135_596_800_000_000];
+                for p in probes {
+                    let a = Arc::new(TimestampMicrosecondArray::from(vec![p])) as ArrayRef;
+                    if let Ok(q) = write(a) {
+                        q.column(0).unwrap();
+                    }
+                }
+            }
+
+            #[test]
+            fn durations_beyond_a_day_round_trip_as_durations() {
+                let q = write(Arc::new(DurationSecondArray::from(vec![3 * 86_400])) as ArrayRef)
+                    .unwrap();
+                assert_eq!(q.fields()[0].number_format.r#type, "INTERVAL");
+                assert_eq!(
+                    q.column(0).unwrap().symbols,
+                    ColumnValues::DurationMicros(vec![3 * 86_400 * 1_000_000])
+                );
+            }
+
+            #[test]
+            fn duplicate_column_names_are_rejected() {
+                let schema = Schema::new(vec![
+                    Field::new("a", DataType::Int64, true),
+                    Field::new("a", DataType::Int64, true),
+                ]);
+                let b = RecordBatch::try_new(
+                    Arc::new(schema),
+                    vec![
+                        Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                        Arc::new(Int64Array::from(vec![2])) as ArrayRef,
+                    ],
+                )
+                .unwrap();
+                let e = $module::record_batch_to_write_table(&b, &WriteOptions::default())
+                    .unwrap_err();
+                assert!(matches!(e, QvdError::DuplicateColumn { name } if name == "a"));
+            }
+
+            #[test]
             fn booleans_floats_and_nulls() {
                 let q = write(
                     Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)])) as ArrayRef,

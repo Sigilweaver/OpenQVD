@@ -345,6 +345,14 @@ pub enum QvdError {
         field: String,
     },
 
+    /// Two columns have the same name; lookups by name would silently pick
+    /// one.
+    #[error("duplicate column name {name:?}")]
+    DuplicateColumn {
+        /// The repeated name.
+        name: String,
+    },
+
     /// A column has a different number of cells than the first column.
     #[error("column {column:?} has {found} cells, expected {expected}")]
     ColumnLengthMismatch {
@@ -493,9 +501,10 @@ impl QvdError {
             | UnterminatedString { .. }
             | UnknownSymbolType { .. }
             | Utf8 { .. } => ErrorKind::Symbol,
-            ColumnNotFound { .. } | FieldNotDecoded { .. } | ColumnLengthMismatch { .. } => {
-                ErrorKind::Schema
-            }
+            ColumnNotFound { .. }
+            | FieldNotDecoded { .. }
+            | DuplicateColumn { .. }
+            | ColumnLengthMismatch { .. } => ErrorKind::Schema,
             NonNumericTemporal { .. }
             | TextInNumericColumn { .. }
             | TimezoneNotSupported { .. }

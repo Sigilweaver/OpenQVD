@@ -90,6 +90,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The row count, symbol-table size and distinct-value count were cast to `u32`
   unchecked, wrapping for very large tables. They are `LayoutOverflow` errors
   (S1-13).
+- Nanosecond (and Time64/Duration nanosecond) values were rounded to the
+  microsecond without notice, merging distinct values. A remainder is now
+  `ValueNotRepresentable`; the `sub_microsecond_precision` lenient check rounds
+  and warns once per column.
+- `Date32`/`Date64` arithmetic overflowed `i32`, and a `Timestamp` near the
+  `i64` limits could produce a file the strict reader rejects. Dates and
+  timestamps are limited to years 0001 to 9999 and checked against the
+  reader's own conversion, so whatever the writer accepts re-reads strictly.
+- Duplicate column names were accepted, so a name lookup silently returned the
+  first column. `WriteTable::new` and opening a file reject them
+  (`DuplicateColumn`).
+- Arrow Duration columns carry the `INTERVAL` format (a TIME column is a time of
+  day and a TIME value of a day or more reads as a timestamp).
 - Timestamp serials are computed with a single rounding, so a whole-second
   timestamp survives write and read exactly.
 - TIMESTAMP and TIME values were truncated toward zero when converted to

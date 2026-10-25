@@ -242,3 +242,24 @@ fn a_huge_record_count_with_zero_width_records_opens_quickly() {
         "validation scaled with NoOfRecords"
     );
 }
+
+#[test]
+fn duplicate_field_names_are_an_error() {
+    // Lookups by name would silently return the first column.
+    let mut b = one(1, 0);
+    b.bit_offset = 1;
+    b.offset = 6;
+    let e = open(file(
+        &[one(1, 0), b],
+        1,
+        1,
+        12,
+        &[SYMS.as_slice(), SYMS.as_slice()].concat(),
+        &[0],
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(&e, QvdError::DuplicateColumn { name } if name == "a"),
+        "{e:?}"
+    );
+}

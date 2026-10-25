@@ -20,6 +20,10 @@ pub enum LenientCheck {
     /// An Arrow timestamp carries a time zone. QVD has none; lenient writing
     /// stores the UTC wall-clock time and warns.
     TimezoneToUtc,
+    /// An Arrow timestamp or time has nanosecond digits below the
+    /// microsecond. A QVD day serial resolves about a microsecond;
+    /// lenient writing rounds to the nearest microsecond and warns.
+    SubMicrosecondPrecision,
 }
 
 impl LenientCheck {
@@ -27,6 +31,7 @@ impl LenientCheck {
     pub const ALL: &'static [LenientCheck] = &[
         LenientCheck::NonNumericTemporal,
         LenientCheck::TimezoneToUtc,
+        LenientCheck::SubMicrosecondPrecision,
     ];
 
     /// Stable snake_case name, e.g. `"non_numeric_temporal"`.
@@ -34,6 +39,7 @@ impl LenientCheck {
         match self {
             LenientCheck::NonNumericTemporal => "non_numeric_temporal",
             LenientCheck::TimezoneToUtc => "timezone_to_utc",
+            LenientCheck::SubMicrosecondPrecision => "sub_microsecond_precision",
         }
     }
 }

@@ -58,6 +58,14 @@ pub struct WriteTable {
 impl WriteTable {
     /// Construct a table. All columns must have the same length.
     pub fn new(name: impl Into<String>, columns: Vec<Column>) -> Result<Self, QvdError> {
+        let mut seen = std::collections::HashSet::new();
+        for c in &columns {
+            if !seen.insert(c.name.as_str()) {
+                return Err(QvdError::DuplicateColumn {
+                    name: c.name.clone(),
+                });
+            }
+        }
         if let Some(first) = columns.first() {
             let n = first.cells.len();
             for c in &columns {
