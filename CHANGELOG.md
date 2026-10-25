@@ -74,6 +74,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- TIMESTAMP and TIME values were truncated toward zero when converted to
+  microseconds, so about 30% of whole-second timestamps came back one
+  microsecond early. They are rounded to the nearest microsecond. A value that
+  does not fit the target type is `TemporalOutOfRange`; NaN and infinity are
+  rejected as non-numeric instead of becoming 1970-01-01 or the type's extreme
+  (S1-1).
+- A column typed DATE, TIMESTAMP or TIME that holds text or a NaN symbol read the
+  text as 0, i.e. 1899-12-30 or a zero duration. It is now
+  `NonNumericTemporal`. With the `non_numeric_temporal` lenient check allowed,
+  the column is read as text and a `Warning` names the column (S1-4).
+- A DATE column whose values carry a time of day lost the fraction, and a
+  negative serial rounded toward zero (-0.5 became 1899-12-30). Such a column is
+  now a timestamp; DATE columns of whole days stay `Date32`, and the day number
+  is range-checked instead of wrapping (S1-6).
 - Symbol-table placement was checked only against the whole file. Each table must
   now lie in front of the row block, and the tables must tile that region
   exactly, with no overlap and no gap (S1-9).
@@ -127,6 +141,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `view_name` without `con` is a `ValueError`.
 
 ### Behavior changes
+
+- 6 corpus files (Qlik course data) have a DATE column with one empty-string
+  symbol; they now fail with `NonNumericTemporal` unless the
+  `non_numeric_temporal` leniency is allowed (Python: `leniency=` with
+  `openqvd.Leniency.lenient()`), which returns that column as text with a
+  warning.
+- A DATE column with a time-of-day fraction in any symbol is returned as
+  `Timestamp(us)` instead of `Date32`. About 9 corpus files have such columns.
+- Timestamps that were one microsecond early are now exact.
 
 - A file now fails to open if: a symbol index is out of range; a field's
   `Bias` is not 0 or -2; its `BitWidth` is above 33; symbol tables overlap,

@@ -375,6 +375,32 @@ pub enum QvdError {
         what: &'static str,
     },
 
+    /// A column typed DATE, TIMESTAMP or TIME holds a symbol that is not a
+    /// finite number.
+    #[error(
+        "column {field:?} is typed {hint} but symbol {index} is {symbol}; \
+         allow the non_numeric_temporal lenient check to read it as text"
+    )]
+    NonNumericTemporal {
+        /// Column name.
+        field: String,
+        /// The `NumberFormat/Type` hint.
+        hint: String,
+        /// The offending symbol, rendered.
+        symbol: String,
+        /// Its position in the symbol table.
+        index: u64,
+    },
+
+    /// A date or time value does not fit the target type.
+    #[error("column {field:?}: value {value} is outside the supported date/time range")]
+    TemporalOutOfRange {
+        /// Column name.
+        field: String,
+        /// The Qlik serial.
+        value: f64,
+    },
+
     /// An Arrow type has no defined mapping to a QVD value.
     #[error("column {column:?}: arrow type {data_type} has no QVD mapping")]
     UnsupportedArrowType {
@@ -437,7 +463,9 @@ impl QvdError {
             ColumnNotFound { .. } | FieldNotDecoded { .. } | ColumnLengthMismatch { .. } => {
                 ErrorKind::Schema
             }
-            CardinalityTooLarge { .. }
+            NonNumericTemporal { .. }
+            | TemporalOutOfRange { .. }
+            | CardinalityTooLarge { .. }
             | NulInString
             | LayoutOverflow { .. }
             | UnsupportedArrowType { .. }

@@ -8,8 +8,10 @@
 
 use crate::error::QvdError;
 use crate::header::FieldHeader;
+use crate::options::{Leniency, LenientCheck};
 use crate::reader::{Qvd, NULL_INDEX};
 use crate::value::Value;
+use crate::warning::{Warning, WarningKind};
 
 /// Qlik date serial epoch: days from 30 Dec 1899 to 1 Jan 1970.
 pub(crate) const QLIK_EPOCH_OFFSET: i32 = 25_569;
@@ -112,13 +114,90 @@ impl ColumnData {
     }
 }
 
-fn infer_type(field: &FieldHeader, symbols: &[Value]) -> ColumnType {
-    match field.number_format.r#type.as_str() {
-        "DATE" => return ColumnType::Date32,
-        "TIMESTAMP" => return ColumnType::TimestampMicros,
-        "TIME" => return ColumnType::DurationMicros,
-        _ => {}
+/// Microseconds per day.
+const MICROS_PER_DAY: f64 = 86_400_000_000.0;
+
+/// The finite numeric value of a symbol, `None` for text and for NaN/Inf.
+fn finite_number(v: &Value) -> Option<f64> {
+    let n = match v {
+        Value::Int(i) => f64::from(*i),
+        Value::DualInt(d) => f64::from(d.number),
+        Value::Float(f) => *f,
+        Value::DualFloat(d) => d.number,
+        _ => return None,
+    };
+    n.is_finite().then_some(n)
+}
+
+/// What the column's type is, and any lenient decision taken to get there.
+///
+/// Called once per decoded field when a file is opened. A column that
+/// `NumberFormat/Type` calls DATE, TIMESTAMP or TIME must hold only finite
+/// numbers; otherwise it is an error, or, when the caller allowed
+/// [`LenientCheck::NonNumericTemporal`], text plus a warning.
+pub(crate) fn resolve_type(
+    field: &FieldHeader,
+    symbols: &[Value],
+    leniency: &Leniency,
+    warnings: &mut Vec<Warning>,
+) -> Result<ColumnType, QvdError> {
+    let hint = field.number_format.r#type.as_str();
+    if matches!(hint, "DATE" | "TIMESTAMP" | "TIME") {
+        let bad: Vec<(usize, &Value)> = symbols
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| finite_number(v).is_none())
+            .collect();
+        if let Some(&(first_idx, first)) = bad.first() {
+            if !leniency.allows(LenientCheck::NonNumericTemporal) {
+                return Err(QvdError::NonNumericTemporal {
+                    field: field.name.clone(),
+                    hint: hint.to_owned(),
+                    symbol: describe(first),
+                    index: first_idx as u64,
+                });
+            }
+            warnings.push(
+                Warning::new(
+                    WarningKind::NonNumericTemporal,
+                    format!(
+                        "{} of {} symbols are not finite numbers (first: {}); \
+                         the {hint} column is returned as text",
+                        bad.len(),
+                        symbols.len(),
+                        describe(first)
+                    ),
+                )
+                .in_column(field.name.clone()),
+            );
+            return Ok(ColumnType::Utf8);
+        }
+        let dtype = match hint {
+            // A DATE whose values carry a time of day keeps it: the column
+            // becomes a timestamp rather than losing the fraction.
+            "DATE" if symbols.iter().all(|v| has_whole_days(v)) => ColumnType::Date32,
+            "DATE" | "TIMESTAMP" => ColumnType::TimestampMicros,
+            _ => ColumnType::DurationMicros,
+        };
+        // Reject values that do not fit the target type now, at open.
+        convert(&field.name, dtype, symbols)?;
+        return Ok(dtype);
     }
+    Ok(infer_from_values(symbols))
+}
+
+fn has_whole_days(v: &Value) -> bool {
+    finite_number(v).is_some_and(|n| n.fract() == 0.0)
+}
+
+fn describe(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("text {s:?}"),
+        other => format!("{other:?}"),
+    }
+}
+
+fn infer_from_values(symbols: &[Value]) -> ColumnType {
     if symbols.is_empty() {
         return ColumnType::Null;
     }
@@ -167,31 +246,62 @@ fn value_as_str(v: &Value) -> String {
     }
 }
 
-fn convert(dtype: ColumnType, symbols: &[Value]) -> ColumnValues {
-    match dtype {
+/// Whole days since 1970-01-01 for a Qlik day serial (floor: a serial of
+/// -0.5 is the day before the epoch day 0).
+fn qlik_days_to_unix(field: &str, n: f64) -> Result<i32, QvdError> {
+    let out_of_range = || QvdError::TemporalOutOfRange {
+        field: field.to_owned(),
+        value: n,
+    };
+    let days = n.floor();
+    if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&days) {
+        return Err(out_of_range());
+    }
+    (days as i32)
+        .checked_sub(QLIK_EPOCH_OFFSET)
+        .ok_or_else(out_of_range)
+}
+
+/// Microseconds for a (fractional) number of days, rounded to the nearest
+/// microsecond. Truncating instead lands 1 us early for about 30% of whole
+/// seconds because a day count is not exactly representable.
+fn days_to_micros(field: &str, days: f64) -> Result<i64, QvdError> {
+    let micros = (days * MICROS_PER_DAY).round();
+    // The upper bound is exclusive: 2^63 as f64 is just out of range.
+    if !micros.is_finite() || micros < i64::MIN as f64 || micros >= i64::MAX as f64 {
+        return Err(QvdError::TemporalOutOfRange {
+            field: field.to_owned(),
+            value: days,
+        });
+    }
+    Ok(micros as i64)
+}
+
+fn convert(field: &str, dtype: ColumnType, symbols: &[Value]) -> Result<ColumnValues, QvdError> {
+    Ok(match dtype {
         ColumnType::Int64 => ColumnValues::Int64(symbols.iter().map(value_as_i64).collect()),
         ColumnType::Float64 => ColumnValues::Float64(symbols.iter().map(value_as_f64).collect()),
         ColumnType::Utf8 => ColumnValues::Utf8(symbols.iter().map(value_as_str).collect()),
         ColumnType::Date32 => ColumnValues::Date32(
             symbols
                 .iter()
-                .map(|v| value_as_i64(v) as i32 - QLIK_EPOCH_OFFSET)
-                .collect(),
+                .map(|v| qlik_days_to_unix(field, value_as_f64(v)))
+                .collect::<Result<_, _>>()?,
         ),
         ColumnType::TimestampMicros => ColumnValues::TimestampMicros(
             symbols
                 .iter()
-                .map(|v| ((value_as_f64(v) - QLIK_EPOCH_OFFSET as f64) * 86_400_000_000.0) as i64)
-                .collect(),
+                .map(|v| days_to_micros(field, value_as_f64(v) - f64::from(QLIK_EPOCH_OFFSET)))
+                .collect::<Result<_, _>>()?,
         ),
         ColumnType::DurationMicros => ColumnValues::DurationMicros(
             symbols
                 .iter()
-                .map(|v| (value_as_f64(v) * 86_400_000_000.0) as i64)
-                .collect(),
+                .map(|v| days_to_micros(field, value_as_f64(v)))
+                .collect::<Result<_, _>>()?,
         ),
         _ => ColumnValues::Null,
-    }
+    })
 }
 
 impl Qvd {
@@ -218,11 +328,11 @@ impl Qvd {
             })?;
         let indices = self.column_indices(index)?;
         let symbols = self.symbols(index).unwrap_or(&[]);
-        let dtype = infer_type(field, symbols);
+        let dtype = self.column_type(index)?;
         Ok(ColumnData {
             name: field.name.clone(),
             dtype,
-            symbols: convert(dtype, symbols),
+            symbols: convert(&field.name, dtype, symbols)?,
             indices,
         })
     }
