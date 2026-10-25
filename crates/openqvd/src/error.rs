@@ -392,6 +392,16 @@ pub enum QvdError {
         index: u64,
     },
 
+    /// A text symbol reached a numeric conversion. Column typing makes this
+    /// unreachable; it is reported instead of being read as 0.
+    #[error("column {field:?}: symbol {symbol} is not a number")]
+    TextInNumericColumn {
+        /// Column name.
+        field: String,
+        /// The symbol, rendered.
+        symbol: String,
+    },
+
     /// A date or time value does not fit the target type.
     #[error("column {field:?}: value {value} is outside the supported date/time range")]
     TemporalOutOfRange {
@@ -464,6 +474,7 @@ impl QvdError {
                 ErrorKind::Schema
             }
             NonNumericTemporal { .. }
+            | TextInNumericColumn { .. }
             | TemporalOutOfRange { .. }
             | CardinalityTooLarge { .. }
             | NulInString

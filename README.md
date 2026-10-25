@@ -173,13 +173,24 @@ extension, which is out of scope.
 
 | QVD NumberFormat/Type | Arrow type |
 |---|---|
-| `DATE` | `Date32` (Qlik epoch → Unix epoch) |
+| `DATE`, every value a whole day | `Date32` (Qlik epoch → Unix epoch) |
+| `DATE`, any value with a time of day | `Timestamp(Microsecond, None)` |
 | `TIMESTAMP` | `Timestamp(Microsecond, None)` |
-| `TIME` | `Duration(Microsecond)` |
+| `TIME`, every value in [0, 1) days | `Duration(Microsecond)` |
+| `TIME`, any value outside [0, 1) | `Timestamp(Microsecond, None)` (the values carry a date) |
+| `INTERVAL` | `Duration(Microsecond)` |
 | Int / DualInt symbols | `Int64` |
 | Float / DualFloat symbols | `Float64` |
 | String symbols | `LargeUtf8` |
 | Empty symbol table | `Null` |
+
+The type is decided by the data as well as the format hint, so one logical
+DATE column can be `Date32` in one extract and `Timestamp` in the next. Read
+`openqvd.schema(path).fields[i].dtype` (Rust: `Qvd::column_type`) to see the
+resolved type, and the `qvd.number_format_type` Arrow field metadata for the
+original hint. DATE, TIMESTAMP, TIME and INTERVAL columns must hold finite
+numbers; text or NaN is an error unless the `non_numeric_temporal` lenient
+check is allowed, which returns that column as text and warns.
 
 ### CLI
 

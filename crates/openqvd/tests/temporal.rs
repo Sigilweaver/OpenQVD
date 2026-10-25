@@ -176,3 +176,36 @@ fn non_temporal_columns_are_unaffected() {
     let q = strict(WriteTable::new("T", vec![c]).unwrap().to_bytes().unwrap()).unwrap();
     assert_eq!(q.column(0).unwrap().dtype, ColumnType::Utf8);
 }
+
+#[test]
+fn time_columns_with_a_date_part_become_timestamps() {
+    // Shape of the one TIME column in the corpus (hora_venda): values like
+    // 44,927.5 days are date-times, not times of day.
+    let q = strict(temporal("TIME", vec![float(44_927.5), float(45_154.25)])).unwrap();
+    let col = q.column(0).unwrap();
+    assert_eq!(col.dtype, ColumnType::TimestampMicros);
+    // A genuine time of day stays a duration, including the edge values.
+    let q = strict(temporal("TIME", vec![float(0.0), float(0.999_999)])).unwrap();
+    assert_eq!(q.column_type(0).unwrap(), ColumnType::DurationMicros);
+    let q = strict(temporal("TIME", vec![float(1.0)])).unwrap();
+    assert_eq!(q.column_type(0).unwrap(), ColumnType::TimestampMicros);
+}
+
+#[test]
+fn interval_columns_are_durations_even_beyond_a_day() {
+    let q = strict(temporal("INTERVAL", vec![float(0.5), float(3.25)])).unwrap();
+    let col = q.column(0).unwrap();
+    assert_eq!(col.dtype, ColumnType::DurationMicros);
+    assert_eq!(
+        col.symbols,
+        ColumnValues::DurationMicros(vec![43_200_000_000, 280_800_000_000])
+    );
+    let e = strict(temporal("INTERVAL", vec![Some(Value::Str("x".into()))])).unwrap_err();
+    assert!(matches!(e, QvdError::NonNumericTemporal { .. }));
+}
+
+#[test]
+fn column_types_have_stable_names() {
+    assert_eq!(ColumnType::TimestampMicros.as_str(), "timestamp_us");
+    assert_eq!(ColumnType::Date32.as_str(), "date32");
+}

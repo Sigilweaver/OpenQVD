@@ -88,6 +88,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   negative serial rounded toward zero (-0.5 became 1899-12-30). Such a column is
   now a timestamp; DATE columns of whole days stay `Date32`, and the day number
   is range-checked instead of wrapping (S1-6).
+- A TIME column whose values carry a date (Qlik's `Time(Now())`; one corpus
+  column has values around 45,000 days) came out as a multi-decade `Duration`.
+  Like DATE, a TIME column with any value outside [0, 1) days is a timestamp.
+  `INTERVAL` columns are durations and may exceed a day.
+- A column's resolved type is visible before reading: `Qvd::column_type`,
+  Python `FieldInfo.dtype` (`schema()` now decodes the symbol tables to
+  resolve it and fails on the same files `read()` fails on), and the Arrow
+  field metadata key `qvd.number_format_type`. The type rule, including that a
+  DATE or TIME column can be a timestamp depending on its data, is documented
+  as part of the contract (README, `ColumnType`).
+- Text symbols reaching a numeric conversion are `TextInNumericColumn` instead
+  of a silent 0.
 - Symbol-table placement was checked only against the whole file. Each table must
   now lie in front of the row block, and the tables must tile that region
   exactly, with no overlap and no gap (S1-9).

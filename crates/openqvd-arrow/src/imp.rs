@@ -55,11 +55,16 @@ pub fn to_record_batch(qvd: &Qvd, options: &BatchOptions) -> Result<RecordBatch,
             col = col.select(r);
         }
         let array = column_to_array(&col)?;
-        fields.push(ArrowField::new(
-            col.name.as_str(),
-            array.data_type().clone(),
-            true,
-        ));
+        // The QVD format hint is kept next to the resolved type: a DATE
+        // column may arrive as Date32 or Timestamp depending on its data.
+        let metadata = std::collections::HashMap::from([(
+            "qvd.number_format_type".to_owned(),
+            qvd.fields()[i].number_format.r#type.clone(),
+        )]);
+        fields.push(
+            ArrowField::new(col.name.as_str(), array.data_type().clone(), true)
+                .with_metadata(metadata),
+        );
         arrays.push(array);
     }
     // A batch with no columns still has rows (`columns=[]` is a legal request).

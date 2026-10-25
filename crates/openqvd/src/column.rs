@@ -18,11 +18,25 @@ pub(crate) const QLIK_EPOCH_OFFSET: i32 = 25_569;
 
 /// The logical type of a decoded column.
 ///
-/// For well-formed files the type is determined by `NumberFormat/Type` and
-/// the symbol kinds: DATE gives `Date32`, TIMESTAMP gives `TimestampMicros`,
-/// TIME gives `DurationMicros`; otherwise Int and DualInt symbols give
-/// `Int64`, Float and DualFloat give `Float64`, any string symbol gives
-/// `Utf8`, and an empty symbol table gives `Null`.
+/// The type is decided by `NumberFormat/Type` and by the data, and is part
+/// of the output contract:
+///
+/// - `DATE`: `Date32` when every value is a whole number of days, otherwise
+///   `TimestampMicros` (a `Date(Now())` keeps its time of day; nothing is
+///   dropped). One value with a fraction changes the whole column, so the
+///   type of the same logical column can differ between two extracts. Read
+///   it with [`Qvd::column_type`] (Python: `FieldInfo.dtype`) before relying
+///   on it.
+/// - `TIMESTAMP`: `TimestampMicros`.
+/// - `TIME`: `DurationMicros` when every value is in `[0, 1)` days,
+///   otherwise `TimestampMicros` (the values carry a date).
+/// - `INTERVAL`: `DurationMicros`; may exceed a day.
+/// - These four hints require finite numbers: text or NaN is an error, or
+///   with the `non_numeric_temporal` leniency the column is `Utf8` plus a
+///   warning.
+/// - Any other hint: Int and DualInt symbols give `Int64`, Float and
+///   DualFloat give `Float64`, any string symbol gives `Utf8`, and an empty
+///   symbol table gives `Null`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ColumnType {
@@ -40,6 +54,21 @@ pub enum ColumnType {
     TimestampMicros,
     /// Microseconds since midnight (a Qlik time of day).
     DurationMicros,
+}
+
+impl ColumnType {
+    /// Stable snake_case name, e.g. `"timestamp_us"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ColumnType::Null => "null",
+            ColumnType::Int64 => "int64",
+            ColumnType::Float64 => "float64",
+            ColumnType::Utf8 => "utf8",
+            ColumnType::Date32 => "date32",
+            ColumnType::TimestampMicros => "timestamp_us",
+            ColumnType::DurationMicros => "duration_us",
+        }
+    }
 }
 
 /// One converted value per distinct symbol of a column.
@@ -142,7 +171,7 @@ pub(crate) fn resolve_type(
     warnings: &mut Vec<Warning>,
 ) -> Result<ColumnType, QvdError> {
     let hint = field.number_format.r#type.as_str();
-    if matches!(hint, "DATE" | "TIMESTAMP" | "TIME") {
+    if matches!(hint, "DATE" | "TIMESTAMP" | "TIME" | "INTERVAL") {
         let bad: Vec<(usize, &Value)> = symbols
             .iter()
             .enumerate()
@@ -162,7 +191,8 @@ pub(crate) fn resolve_type(
                     WarningKind::NonNumericTemporal,
                     format!(
                         "{} of {} symbols are not finite numbers (first: {}); \
-                         the {hint} column is returned as text",
+                         the {hint} column is returned as text (numbers without \
+                         a dual text are formatted by Rust, e.g. 45000.5)",
                         bad.len(),
                         symbols.len(),
                         describe(first)
@@ -177,6 +207,12 @@ pub(crate) fn resolve_type(
             // becomes a timestamp rather than losing the fraction.
             "DATE" if symbols.iter().all(has_whole_days) => ColumnType::Date32,
             "DATE" | "TIMESTAMP" => ColumnType::TimestampMicros,
+            // A time of day is a fraction of a day. A TIME column with a
+            // value outside [0, 1) holds date-times (Qlik's Time(Now())
+            // keeps the date), so, like DATE, it becomes a timestamp.
+            "TIME" if symbols.iter().all(is_time_of_day) => ColumnType::DurationMicros,
+            "TIME" => ColumnType::TimestampMicros,
+            // INTERVAL is a length of time and may exceed a day.
             _ => ColumnType::DurationMicros,
         };
         // Reject values that do not fit the target type now, at open.
@@ -184,6 +220,10 @@ pub(crate) fn resolve_type(
         return Ok(dtype);
     }
     Ok(infer_from_values(symbols))
+}
+
+fn is_time_of_day(v: &Value) -> bool {
+    finite_number(v).is_some_and(|n| (0.0..1.0).contains(&n))
 }
 
 fn has_whole_days(v: &Value) -> bool {
@@ -216,24 +256,33 @@ fn infer_from_values(symbols: &[Value]) -> ColumnType {
     }
 }
 
-fn value_as_i64(v: &Value) -> i64 {
-    match v {
-        Value::Int(i) => *i as i64,
-        Value::DualInt(d) => d.number as i64,
-        Value::Float(f) => *f as i64,
-        Value::DualFloat(d) => d.number as i64,
-        Value::Str(s) => s.parse().unwrap_or(0),
+fn text_in_numeric_column(field: &str, v: &Value) -> QvdError {
+    // Unreachable for a resolved type (a text symbol makes the column
+    // Utf8); reported rather than defaulted to 0 if that ever changes.
+    QvdError::TextInNumericColumn {
+        field: field.to_owned(),
+        symbol: describe(v),
     }
 }
 
-fn value_as_f64(v: &Value) -> f64 {
-    match v {
+fn value_as_i64(field: &str, v: &Value) -> Result<i64, QvdError> {
+    Ok(match v {
+        Value::Int(i) => i64::from(*i),
+        Value::DualInt(d) => i64::from(d.number),
+        Value::Float(f) => *f as i64,
+        Value::DualFloat(d) => d.number as i64,
+        other => return Err(text_in_numeric_column(field, other)),
+    })
+}
+
+fn value_as_f64(field: &str, v: &Value) -> Result<f64, QvdError> {
+    Ok(match v {
         Value::Float(f) => *f,
         Value::DualFloat(d) => d.number,
-        Value::Int(i) => *i as f64,
-        Value::DualInt(d) => d.number as f64,
-        Value::Str(s) => s.parse().unwrap_or(0.0),
-    }
+        Value::Int(i) => f64::from(*i),
+        Value::DualInt(d) => f64::from(d.number),
+        other => return Err(text_in_numeric_column(field, other)),
+    })
 }
 
 fn value_as_str(v: &Value) -> String {
@@ -279,25 +328,40 @@ fn days_to_micros(field: &str, days: f64) -> Result<i64, QvdError> {
 
 fn convert(field: &str, dtype: ColumnType, symbols: &[Value]) -> Result<ColumnValues, QvdError> {
     Ok(match dtype {
-        ColumnType::Int64 => ColumnValues::Int64(symbols.iter().map(value_as_i64).collect()),
-        ColumnType::Float64 => ColumnValues::Float64(symbols.iter().map(value_as_f64).collect()),
+        ColumnType::Int64 => ColumnValues::Int64(
+            symbols
+                .iter()
+                .map(|v| value_as_i64(field, v))
+                .collect::<Result<_, _>>()?,
+        ),
+        ColumnType::Float64 => ColumnValues::Float64(
+            symbols
+                .iter()
+                .map(|v| value_as_f64(field, v))
+                .collect::<Result<_, _>>()?,
+        ),
         ColumnType::Utf8 => ColumnValues::Utf8(symbols.iter().map(value_as_str).collect()),
         ColumnType::Date32 => ColumnValues::Date32(
             symbols
                 .iter()
-                .map(|v| qlik_days_to_unix(field, value_as_f64(v)))
+                .map(|v| qlik_days_to_unix(field, value_as_f64(field, v)?))
                 .collect::<Result<_, _>>()?,
         ),
         ColumnType::TimestampMicros => ColumnValues::TimestampMicros(
             symbols
                 .iter()
-                .map(|v| days_to_micros(field, value_as_f64(v) - f64::from(QLIK_EPOCH_OFFSET)))
+                .map(|v| {
+                    days_to_micros(
+                        field,
+                        value_as_f64(field, v)? - f64::from(QLIK_EPOCH_OFFSET),
+                    )
+                })
                 .collect::<Result<_, _>>()?,
         ),
         ColumnType::DurationMicros => ColumnValues::DurationMicros(
             symbols
                 .iter()
-                .map(|v| days_to_micros(field, value_as_f64(v)))
+                .map(|v| days_to_micros(field, value_as_f64(field, v)?))
                 .collect::<Result<_, _>>()?,
         ),
         _ => ColumnValues::Null,

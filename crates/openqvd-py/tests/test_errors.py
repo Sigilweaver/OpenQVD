@@ -137,14 +137,18 @@ def test_strict_read_has_no_warnings(good_qvd):
     assert s.warnings == []
 
 
-def test_schema_does_not_decode_symbols(good_qvd, tmp_path):
-    """schema() is metadata only: corrupting a symbol table must not matter."""
+def test_schema_resolves_types_and_validates(good_qvd, tmp_path):
+    """schema() decodes symbol tables (the type depends on the values), so a
+    damaged symbol table raises here as it does in read()."""
+    s = openqvd.schema(good_qvd)
+    assert s.num_rows == 3
+    assert s.column_names == ["a", "b"]
+    assert [f.dtype for f in s.fields] == ["int64", "utf8"]
     data = bytearray(good_qvd.read_bytes())
     header_end = data.index(b"</QvdTableHeader>")
     body = data.index(b"\x00", header_end) + 1
     data[body] = 0x7F
     p = tmp_path / "sym.qvd"
     p.write_bytes(bytes(data))
-    s = openqvd.schema(p)
-    assert s.num_rows == 3
-    assert s.column_names == ["a", "b"]
+    with pytest.raises(openqvd.QvdSymbolError):
+        openqvd.schema(p)
