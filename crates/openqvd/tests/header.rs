@@ -282,3 +282,25 @@ fn writer_output_with_special_names_round_trips() {
     assert_eq!(q.table_name(), "R&D table");
     assert_eq!(q.fields()[0].name, " Amount & Tax <1> Customer's \"q\"");
 }
+
+#[test]
+fn number_format_type_is_required_exactly_once() {
+    // Type selects the DATE/TIMESTAMP/TIME conversion, so a missing one must
+    // not silently read the column as plain numbers.
+    let base = String::from_utf8(build(&Spec::default())).unwrap();
+    let missing = base.replace("<Type>UNKNOWN</Type>", "");
+    let e = parse(missing.into_bytes()).unwrap_err();
+    assert!(
+        matches!(&e, QvdError::MissingElement { element, .. } if element == "Type"),
+        "{e:?}"
+    );
+    let twice = base.replace(
+        "<Type>UNKNOWN</Type>",
+        "<Type>DATE</Type><Type>UNKNOWN</Type>",
+    );
+    let e = parse(twice.into_bytes()).unwrap_err();
+    assert!(
+        matches!(&e, QvdError::DuplicateElement { element, .. } if element == "Type"),
+        "{e:?}"
+    );
+}

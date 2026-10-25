@@ -1,8 +1,9 @@
 use crate::error::QvdError;
 
 /// Parsed `<NumberFormat>` element. Every observed file contains the
-/// same six sub-elements. Values are informational only: they do not
-/// change how bytes are decoded.
+/// same six sub-elements. They do not change how bytes are decoded, but
+/// `Type` selects how a column's values are converted (DATE, TIMESTAMP and
+/// TIME columns become date/time types), so it is required exactly once.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NumberFormat {
@@ -84,7 +85,7 @@ pub struct FieldHeader {
     pub offset: u32,
     /// `Length`: byte length of the symbol table.
     pub length: u32,
-    /// `NumberFormat` sub-element (informational).
+    /// `NumberFormat` sub-element.
     pub number_format: NumberFormat,
     /// `Tags/String` children. Usually Qlik markers such as
     /// `$numeric`, `$text`, `$key`.
@@ -194,6 +195,7 @@ struct FieldBuilder {
     offset: Option<u32>,
     length: Option<u32>,
     number_format: NumberFormat,
+    number_type: Option<()>,
     tags: Vec<String>,
 }
 
@@ -201,6 +203,7 @@ impl FieldBuilder {
     fn build(self) -> Result<FieldHeader, QvdError> {
         let name = require(self.name, "FieldName", None)?;
         let f = Some(name.as_str());
+        require(self.number_type, "Type", f)?;
         Ok(FieldHeader {
             bit_offset: require(self.bit_offset, "BitOffset", f)?,
             bit_width: require(self.bit_width, "BitWidth", f)?,
@@ -341,7 +344,11 @@ fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
                 ("NumberFormat", sub) => {
                     if let Some(f) = current.as_mut() {
                         match sub {
-                            "Type" => f.number_format.r#type = txt,
+                            "Type" => {
+                                let fname = f.name.clone();
+                                set_once(&mut f.number_type, (), "Type", fname.as_deref())?;
+                                f.number_format.r#type = txt
+                            }
                             "nDec" => f.number_format.n_dec = txt,
                             "UseThou" => f.number_format.use_thou = txt,
                             "Fmt" => f.number_format.fmt = txt,
