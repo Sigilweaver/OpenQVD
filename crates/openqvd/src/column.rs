@@ -175,7 +175,7 @@ pub(crate) fn resolve_type(
         let dtype = match hint {
             // A DATE whose values carry a time of day keeps it: the column
             // becomes a timestamp rather than losing the fraction.
-            "DATE" if symbols.iter().all(|v| has_whole_days(v)) => ColumnType::Date32,
+            "DATE" if symbols.iter().all(has_whole_days) => ColumnType::Date32,
             "DATE" | "TIMESTAMP" => ColumnType::TimestampMicros,
             _ => ColumnType::DurationMicros,
         };
