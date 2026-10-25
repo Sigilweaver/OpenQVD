@@ -2,6 +2,10 @@
 
 use openqvd::{Column, Dual, Qvd, Value, WriteTable};
 
+fn parse(bytes: Vec<u8>) -> Result<Qvd, openqvd::QvdError> {
+    Qvd::parse(bytes, &openqvd::ReadOptions::default())
+}
+
 fn s(v: &str) -> Option<Value> {
     Some(Value::Str(v.into()))
 }
@@ -21,24 +25,24 @@ fn round_trip_no_nulls() {
     ];
     let t = WriteTable::new("demo", cols).unwrap();
     let bytes = t.to_bytes().unwrap();
-    let q = Qvd::from_bytes(bytes).unwrap();
+    let q = parse(bytes).unwrap();
     assert_eq!(q.num_rows(), 3);
     assert_eq!(q.table_name(), "demo");
-    let rows: Vec<_> = q.rows().collect();
+    let rows: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(rows[0][0], Some(Value::Int(1)));
     assert_eq!(rows[0][1], s("alpha"));
     assert_eq!(rows[1][1], s("beta"));
     assert_eq!(rows[2][1], s("alpha"));
     // "alpha" must dedupe to a single symbol.
-    assert_eq!(q.symbols(1).unwrap().len(), 2);
+    assert_eq!(q.fields()[1].no_of_symbols, 2);
 }
 
 #[test]
 fn round_trip_with_nulls() {
     let cols = vec![Column::new("v", vec![s("X"), None, s("Y"), s("X"), None])];
     let t = WriteTable::new("t", cols).unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
-    let rows: Vec<_> = q.rows().collect();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
+    let rows: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(rows[0][0], s("X"));
     assert_eq!(rows[1][0], None);
     assert_eq!(rows[2][0], s("Y"));
@@ -59,33 +63,21 @@ fn round_trip_all_types() {
         Column::new(
             "di",
             vec![
-                Some(Value::DualInt(Dual {
-                    number: 10,
-                    text: "ten".into(),
-                })),
-                Some(Value::DualInt(Dual {
-                    number: 20,
-                    text: "twenty".into(),
-                })),
+                Some(Value::DualInt(Dual::new(10, "ten"))),
+                Some(Value::DualInt(Dual::new(20, "twenty"))),
             ],
         ),
         Column::new(
             "df",
             vec![
-                Some(Value::DualFloat(Dual {
-                    number: 3.14,
-                    text: "pi".into(),
-                })),
-                Some(Value::DualFloat(Dual {
-                    number: 2.72,
-                    text: "e".into(),
-                })),
+                Some(Value::DualFloat(Dual::new(3.14, "pi"))),
+                Some(Value::DualFloat(Dual::new(2.72, "e"))),
             ],
         ),
     ];
     let t = WriteTable::new("big", cols).unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
-    let rows: Vec<_> = q.rows().collect();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
+    let rows: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();
     assert_eq!(rows[0][0], Some(Value::Int(-42)));
     assert_eq!(rows[0][1], Some(Value::Float(1.25)));
     assert_eq!(rows[0][2], s("hi"));
@@ -98,7 +90,7 @@ fn round_trip_all_types() {
 fn empty_table_round_trips() {
     // No rows, but a declared column.
     let t = WriteTable::new("empty", vec![Column::new("x", vec![])]).unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
     assert_eq!(q.num_rows(), 0);
     assert_eq!(q.fields().len(), 1);
     assert_eq!(q.fields()[0].bit_width, 0);
@@ -112,10 +104,10 @@ fn single_symbol_column_uses_zero_width() {
         vec![Column::new("c", vec![s("same"), s("same"), s("same")])],
     )
     .unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
     assert_eq!(q.fields()[0].bit_width, 0);
     assert_eq!(q.fields()[0].no_of_symbols, 1);
-    let rows: Vec<_> = q.rows().collect();
+    let rows: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();
     for r in rows {
         assert_eq!(r[0], s("same"));
     }
@@ -127,10 +119,10 @@ fn wide_cardinality_column() {
     let mut cells: Vec<_> = (0..500).map(|i| s(&format!("k{i}"))).collect();
     cells.extend((0..500).map(|i| s(&format!("k{i}"))));
     let t = WriteTable::new("w", vec![Column::new("c", cells.clone())]).unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
     assert_eq!(q.fields()[0].no_of_symbols, 500);
     assert_eq!(q.fields()[0].bit_width, 9);
-    let got: Vec<_> = q.rows().collect();
+    let got: Vec<_> = q.rows().collect::<Result<_, _>>().unwrap();
     for (i, row) in got.iter().enumerate() {
         assert_eq!(row[0], cells[i]);
     }
@@ -144,7 +136,7 @@ fn nul_in_string_is_rejected() {
     )
     .unwrap();
     let err = t.to_bytes().unwrap_err();
-    assert!(matches!(err, openqvd::QvdError::Structure(_)));
+    assert!(matches!(err, openqvd::QvdError::NulInString));
 }
 
 #[test]
@@ -157,7 +149,14 @@ fn uneven_columns_rejected() {
         ],
     )
     .unwrap_err();
-    assert!(matches!(err, openqvd::QvdError::Structure(_)));
+    assert!(matches!(
+        err,
+        openqvd::QvdError::ColumnLengthMismatch {
+            found: 2,
+            expected: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -188,18 +187,16 @@ fn number_format_and_tags_round_trip() {
         "price",
         vec![Some(Value::Float(1.25)), Some(Value::Float(2.5))],
     );
-    col.number_format = NumberFormat {
-        r#type: "MONEY".to_string(),
-        n_dec: "2".to_string(),
-        use_thou: "1".to_string(),
-        fmt: "$#,##0.00;($#,##0.00)".to_string(),
-        dec: ".".to_string(),
-        thou: ",".to_string(),
-    };
+    col.number_format = NumberFormat::new("MONEY")
+        .with_n_dec("2")
+        .with_use_thou("1")
+        .with_fmt("$#,##0.00;($#,##0.00)")
+        .with_dec(".")
+        .with_thou(",");
     col.tags = vec!["$numeric".to_string(), "$key".to_string()];
 
     let t = WriteTable::new("t", vec![col]).unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
 
     let f = &q.fields()[0];
     assert_eq!(f.number_format.r#type, "MONEY");
@@ -221,7 +218,7 @@ fn multiple_tags_all_preserved() {
         "$hidden".into(),
     ];
     let t = WriteTable::new("t", vec![col]).unwrap();
-    let q = Qvd::from_bytes(t.to_bytes().unwrap()).unwrap();
+    let q = parse(t.to_bytes().unwrap()).unwrap();
     assert_eq!(q.fields()[0].tags.len(), 4);
     assert_eq!(q.fields()[0].tags[0], "$numeric");
     assert_eq!(q.fields()[0].tags[3], "$hidden");

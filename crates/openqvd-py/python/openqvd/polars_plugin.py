@@ -38,6 +38,7 @@ def read_qvd(
     *,
     columns: Optional[List[str]] = None,
     filters: Optional[List[dict]] = None,
+    leniency: openqvd.LeniencyLike = None,
 ) -> pl.DataFrame:
     """Read a QVD file as a Polars DataFrame.
 
@@ -50,12 +51,14 @@ def read_qvd(
     filters:
         Optional list of predicate-pushdown filter dicts. See
         ``openqvd.read`` for the format.
+    leniency:
+        See ``openqvd.read``. ``None`` (default) is strict.
 
     Returns
     -------
     polars.DataFrame
     """
-    table = openqvd.read(path, columns=columns, filters=filters)
+    table = openqvd.read(path, columns=columns, filters=filters, leniency=leniency)
     return pl.from_arrow(table)
 
 
@@ -64,6 +67,7 @@ def scan_qvd(
     *,
     columns: Optional[List[str]] = None,
     filters: Optional[List[dict]] = None,
+    leniency: openqvd.LeniencyLike = None,
 ) -> pl.LazyFrame:
     """Read a QVD file eagerly and wrap it as a Polars LazyFrame.
 
@@ -82,6 +86,8 @@ def scan_qvd(
     filters:
         Optional list of predicate-pushdown filter dicts. See
         ``openqvd.read`` for the format.
+    leniency:
+        See ``openqvd.read``. ``None`` (default) is strict.
 
     Returns
     -------
@@ -90,7 +96,9 @@ def scan_qvd(
     # Polars does not have a native QVD scan source yet, so we wrap the
     # eager read inside a lazy sink.  For files that fit in RAM this is
     # equivalent in practice; a native scan plugin can be added later.
-    return read_qvd(path, columns=columns, filters=filters).lazy()
+    return read_qvd(
+        path, columns=columns, filters=filters, leniency=leniency
+    ).lazy()
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +120,7 @@ class QvdDataFrameNamespace:
         path: Union[str, Path],
         *,
         table_name: Optional[str] = None,
+        leniency: openqvd.LeniencyLike = None,
     ) -> None:
         """Write this DataFrame to a QVD file.
 
@@ -122,6 +131,8 @@ class QvdDataFrameNamespace:
         table_name:
             Logical table name embedded in the QVD header.  Defaults to
             the file stem of ``path``.
+        leniency:
+            See ``openqvd.write``. ``None`` (default) is strict.
 
         Examples
         --------
@@ -131,7 +142,7 @@ class QvdDataFrameNamespace:
         >>> df.qvd.write("out.qvd")
         """
         table = self._df.to_arrow()
-        openqvd.write(table, path, table_name=table_name)
+        openqvd.write(table, path, table_name=table_name, leniency=leniency)
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +164,7 @@ class QvdLazyFrameNamespace:
         path: Union[str, Path],
         *,
         table_name: Optional[str] = None,
+        leniency: openqvd.LeniencyLike = None,
     ) -> None:
         """Collect the LazyFrame and write the result to a QVD file.
 
@@ -170,7 +182,7 @@ class QvdLazyFrameNamespace:
         >>> lf = pl.scan_qvd("data.qvd", columns=["A"])
         >>> lf.qvd.collect_and_write("filtered.qvd")
         """
-        self._lf.collect().qvd.write(path, table_name=table_name)
+        self._lf.collect().qvd.write(path, table_name=table_name, leniency=leniency)
 
 
 # ---------------------------------------------------------------------------

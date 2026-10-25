@@ -35,6 +35,7 @@ def to_relation(
     con=None,
     *,
     view_name: Optional[str] = None,
+    leniency=None,
 ):
     """Load a QVD file into DuckDB and return a DuckDB relation.
 
@@ -48,6 +49,8 @@ def to_relation(
     view_name:
         When provided, the data is also registered as a view on the connection
         under this name so it can be queried by SQL.
+    leniency:
+        See ``openqvd.read``. ``None`` (default) is strict.
 
     Returns
     -------
@@ -67,14 +70,14 @@ def to_relation(
     if con is None:
         con = duckdb.connect()
 
-    table = openqvd.read(str(path))
+    table = openqvd.read(str(path), leniency=leniency)
     if view_name is not None:
         con.register(view_name, table)
         return con.table(view_name)
     return con.from_arrow(table)
 
 
-def register(con, name: str, path: Union[str, Path]) -> None:
+def register(con, name: str, path: Union[str, Path], *, leniency=None) -> None:
     """Register a QVD file as a named view on a DuckDB connection.
 
     The file is read eagerly into an Arrow table and registered; subsequent
@@ -88,6 +91,8 @@ def register(con, name: str, path: Union[str, Path]) -> None:
         The SQL view name to register.
     path:
         Path to the ``.qvd`` file.
+    leniency:
+        See ``openqvd.read``. ``None`` (default) is strict.
 
     Examples
     --------
@@ -98,7 +103,7 @@ def register(con, name: str, path: Union[str, Path]) -> None:
     """
     import openqvd
 
-    table = openqvd.read(str(path))
+    table = openqvd.read(str(path), leniency=leniency)
     con.register(name, table)
 
 
@@ -108,6 +113,7 @@ def from_query(
     *,
     con=None,
     table_name: Optional[str] = None,
+    leniency=None,
 ) -> None:
     """Write a DuckDB query or relation to a QVD file.
 
@@ -125,6 +131,8 @@ def from_query(
     table_name:
         Logical table name stored in the QVD header. Defaults to the file stem
         of ``path``.
+    leniency:
+        See ``openqvd.write``. ``None`` (default) is strict.
 
     Examples
     --------
@@ -158,4 +166,4 @@ def from_query(
     else:
         table = arrow_obj
 
-    openqvd.write(table, path, table_name=table_name)
+    openqvd.write(table, path, table_name=table_name, leniency=leniency)

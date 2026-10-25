@@ -6,7 +6,7 @@
 
 #![allow(unsafe_code)] // required by pyo3 proc-macros
 
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
 
@@ -14,14 +14,129 @@ use pyo3_arrow::PyRecordBatch;
 // Error helpers
 // ---------------------------------------------------------------------------
 
+/// Name of the `openqvd.exceptions` class for an error kind. Kinds this
+/// binding does not know yet fall back to the base class, so a new Rust kind
+/// is never reported as something unrelated.
+fn exception_name(kind: openqvd::ErrorKind) -> &'static str {
+    use openqvd::ErrorKind as K;
+    match kind {
+        K::Io => "QvdIOError",
+        K::Header => "QvdHeaderError",
+        K::Structure => "QvdStructureError",
+        K::Symbol => "QvdSymbolError",
+        K::Schema => "QvdSchemaError",
+        K::Conversion => "QvdConversionError",
+        K::Unsupported => "QvdUnsupportedError",
+        _ => "QvdError",
+    }
+}
+
+/// Map a Rust error to the matching `openqvd.exceptions` class by its typed
+/// kind, never by its message text.
 fn to_py(e: openqvd::QvdError) -> PyErr {
-    let s = e.to_string();
-    if s.contains("io error") || s.contains("os error") {
-        PyIOError::new_err(s)
-    } else if s.contains("structure") || s.contains("xml") || s.contains("invalid") {
-        PyValueError::new_err(s)
-    } else {
-        PyRuntimeError::new_err(s)
+    Python::attach(|py| {
+        let build = || -> PyResult<PyErr> {
+            let module = py.import("openqvd.exceptions")?;
+            if let openqvd::QvdError::Io(io) = &e {
+                use std::io::ErrorKind as IoKind;
+                let name = match io.kind() {
+                    IoKind::NotFound => "QvdFileNotFoundError",
+                    IoKind::PermissionDenied => "QvdPermissionError",
+                    _ => "QvdIOError",
+                };
+                let cls = module.getattr(name)?;
+                let text = io.to_string();
+                let exc = match io.raw_os_error() {
+                    Some(errno) => cls.call1((errno, text))?,
+                    None => cls.call1((text,))?,
+                };
+                return Ok(PyErr::from_value(exc));
+            }
+            let cls = module.getattr(exception_name(e.kind()))?;
+            Ok(PyErr::from_value(cls.call1((e.to_string(),))?))
+        };
+        match build() {
+            Ok(err) => err,
+            Err(import_err) => import_err,
+        }
+    })
+}
+
+/// Parse leniency check names passed from Python.
+fn parse_leniency(names: Option<Vec<String>>) -> PyResult<openqvd::Leniency> {
+    let mut leniency = openqvd::Leniency::strict();
+    for name in names.unwrap_or_default() {
+        let check: openqvd::LenientCheck = name
+            .parse()
+            .map_err(|e: openqvd::UnknownCheck| PyValueError::new_err(e.to_string()))?;
+        leniency = leniency.with(check);
+    }
+    Ok(leniency)
+}
+
+/// Names of every lenient check this build knows about.
+#[pyfunction]
+fn lenient_checks() -> Vec<&'static str> {
+    openqvd::LenientCheck::ALL
+        .iter()
+        .map(|c| c.as_str())
+        .collect()
+}
+
+/// One deviation that a lenient read tolerated.
+#[pyclass(
+    module = "openqvd._openqvd",
+    name = "ReadWarning",
+    frozen,
+    eq,
+    from_py_object
+)]
+#[derive(Clone, PartialEq)]
+struct PyReadWarning {
+    /// Stable snake_case code, e.g. ``"non_numeric_temporal"``.
+    #[pyo3(get)]
+    kind: String,
+    /// Affected column name, if the warning is about one.
+    #[pyo3(get)]
+    column: Option<String>,
+    /// Affected zero-based row, if the warning is about one.
+    #[pyo3(get)]
+    row: Option<u64>,
+    /// Human-readable detail.
+    #[pyo3(get)]
+    detail: String,
+}
+
+#[pymethods]
+impl PyReadWarning {
+    fn __repr__(&self) -> String {
+        format!(
+            "ReadWarning(kind={:?}, column={:?}, row={:?}, detail={:?})",
+            self.kind, self.column, self.row, self.detail
+        )
+    }
+
+    fn __str__(&self) -> String {
+        let mut s = self.kind.clone();
+        if let Some(c) = &self.column {
+            s.push_str(&format!(" column {c:?}"));
+        }
+        if let Some(r) = self.row {
+            s.push_str(&format!(" row {r}"));
+        }
+        s.push_str(&format!(": {}", self.detail));
+        s
+    }
+}
+
+impl From<&openqvd::Warning> for PyReadWarning {
+    fn from(w: &openqvd::Warning) -> Self {
+        Self {
+            kind: w.kind.code().to_owned(),
+            column: w.column.clone(),
+            row: w.row,
+            detail: w.detail.clone(),
+        }
     }
 }
 
@@ -43,6 +158,8 @@ struct PyQvdSchema {
     num_rows: u32,
     #[pyo3(get)]
     fields: Vec<PyFieldInfo>,
+    #[pyo3(get)]
+    warnings: Vec<PyReadWarning>,
 }
 
 #[pymethods]
@@ -61,6 +178,7 @@ impl PyQvdSchema {
     }
 
     /// Return column names in order.
+    #[getter]
     fn column_names(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.name.clone()).collect()
     }
@@ -178,7 +296,7 @@ fn parse_py_filters(
                 )));
             }
         };
-        result.push(openqvd::Filter { column, predicate });
+        result.push(openqvd::Filter::new(column, predicate));
     }
     Ok(result)
 }
@@ -187,7 +305,7 @@ fn parse_py_filters(
 // Core read function
 // ---------------------------------------------------------------------------
 
-/// Read a QVD file and return an Arrow RecordBatch.
+/// Read a QVD file and return an Arrow RecordBatch plus any warnings.
 ///
 /// Parameters
 /// ----------
@@ -202,56 +320,44 @@ fn parse_py_filters(
 ///     is_in/not_in, absent for null checks). Filters are resolved against
 ///     the column symbol table before row iteration, so non-matching rows
 ///     are skipped without full decoding.
+/// leniency : list[str] | None
+///     Names of the lenient checks to allow. ``None`` means strict.
 ///
 /// Returns
 /// -------
-/// pyarrow.RecordBatch
-///     The decoded table data.
+/// tuple[pyarrow.RecordBatch, list[ReadWarning]]
+///     The decoded table data and what a lenient read tolerated.
 #[pyfunction]
-#[pyo3(signature = (path, columns=None, filters=None))]
+#[pyo3(signature = (path, columns=None, filters=None, leniency=None))]
 fn read(
     py: Python<'_>,
     path: &str,
     columns: Option<Vec<String>>,
     filters: Option<Bound<'_, pyo3::types::PyList>>,
-) -> PyResult<PyRecordBatch> {
-    // Compute the set of columns whose symbol tables we actually need.
+    leniency: Option<Vec<String>>,
+) -> PyResult<(PyRecordBatch, Vec<PyReadWarning>)> {
+    let leniency = parse_leniency(leniency)?;
     let rust_filters = match filters {
         Some(ref f) if !f.is_empty() => Some(parse_py_filters(py, f)?),
         _ => None,
     };
 
-    let needed: Option<Vec<String>> = match (&columns, &rust_filters) {
-        (None, None) => None, // need all columns
-        _ => {
-            let mut set = std::collections::HashSet::new();
-            if let Some(cols) = &columns {
-                for c in cols {
-                    set.insert(c.clone());
+    // Symbol tables are decoded only for the projected columns plus the
+    // filter columns. Without a projection every column is needed for the
+    // output, so nothing is restricted.
+    let mut options = openqvd::ReadOptions::default().with_leniency(leniency);
+    if let Some(cols) = &columns {
+        let mut set: Vec<String> = cols.clone();
+        if let Some(fs) = &rust_filters {
+            for f in fs {
+                if !set.contains(&f.column) {
+                    set.push(f.column.clone());
                 }
             }
-            if let Some(fs) = &rust_filters {
-                for f in fs {
-                    set.insert(f.column.clone());
-                }
-            }
-            // If only filters are set (no projection), we still need all
-            // columns for the output, so don't restrict symbol decoding.
-            if columns.is_none() {
-                None
-            } else {
-                Some(set.into_iter().collect())
-            }
         }
-    };
-
-    let qvd = match &needed {
-        Some(names) => {
-            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-            openqvd::Qvd::from_path_projected(path, &refs).map_err(to_py)?
-        }
-        None => openqvd::Qvd::from_path(path).map_err(to_py)?,
-    };
+        options = options.with_columns(set);
+    }
+    let qvd = openqvd::Qvd::open(path, &options).map_err(to_py)?;
 
     let col_refs: Option<Vec<&str>> = columns
         .as_ref()
@@ -262,23 +368,32 @@ fn read(
             .map_err(to_py)?,
         _ => qvd.to_record_batch(col_refs.as_deref()).map_err(to_py)?,
     };
-    Ok(PyRecordBatch::new(batch))
+    let warnings = qvd.warnings().iter().map(PyReadWarning::from).collect();
+    Ok((PyRecordBatch::new(batch), warnings))
 }
 
-/// Read only the schema/metadata of a QVD file without decoding row data.
+/// Read only the schema/metadata of a QVD file without decoding symbol
+/// tables or row data.
 ///
 /// Parameters
 /// ----------
 /// path : str
 ///     Path to the .qvd file.
+/// leniency : list[str] | None
+///     Names of the lenient checks to allow. ``None`` means strict.
 ///
 /// Returns
 /// -------
 /// Schema
-///     Metadata object with `.table_name`, `.num_rows`, `.fields`.
+///     Metadata object with `.table_name`, `.num_rows`, `.fields`,
+///     `.warnings`.
 #[pyfunction]
-fn schema(path: &str) -> PyResult<PyQvdSchema> {
-    let qvd = openqvd::Qvd::from_path(path).map_err(to_py)?;
+#[pyo3(signature = (path, leniency=None))]
+fn schema(path: &str, leniency: Option<Vec<String>>) -> PyResult<PyQvdSchema> {
+    let options = openqvd::ReadOptions::default()
+        .with_columns(Vec::<String>::new())
+        .with_leniency(parse_leniency(leniency)?);
+    let qvd = openqvd::Qvd::open(path, &options).map_err(to_py)?;
     let fields: Vec<PyFieldInfo> = qvd
         .fields()
         .iter()
@@ -295,6 +410,7 @@ fn schema(path: &str) -> PyResult<PyQvdSchema> {
         table_name: qvd.table_name().to_string(),
         num_rows: qvd.num_rows(),
         fields,
+        warnings: qvd.warnings().iter().map(PyReadWarning::from).collect(),
     })
 }
 
@@ -314,16 +430,25 @@ fn schema(path: &str) -> PyResult<PyQvdSchema> {
 /// table_name : str, optional
 ///     Logical table name embedded in the QVD header. Defaults to the
 ///     file stem of ``path``.
+/// leniency : list[str] | None
+///     Names of the lenient checks to allow. ``None`` means strict.
 #[pyfunction]
-#[pyo3(signature = (data, path, table_name=None))]
-fn write(data: PyRecordBatch, path: &str, table_name: Option<&str>) -> PyResult<()> {
+#[pyo3(signature = (data, path, table_name=None, leniency=None))]
+fn write(
+    data: PyRecordBatch,
+    path: &str,
+    table_name: Option<&str>,
+    leniency: Option<Vec<String>>,
+) -> PyResult<()> {
     let batch = data.into_inner();
     let stem = std::path::Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("table");
-    let name = table_name.unwrap_or(stem);
-    let wt = openqvd::record_batch_to_write_table(&batch, name).map_err(to_py)?;
+    let options = openqvd::WriteOptions::default()
+        .with_table_name(table_name.unwrap_or(stem))
+        .with_leniency(parse_leniency(leniency)?);
+    let wt = openqvd::record_batch_to_write_table(&batch, &options).map_err(to_py)?;
     wt.write_to_path(path).map_err(to_py)?;
     Ok(())
 }
@@ -341,6 +466,8 @@ fn _openqvd(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read, m)?)?;
     m.add_function(wrap_pyfunction!(schema, m)?)?;
     m.add_function(wrap_pyfunction!(write, m)?)?;
+    m.add_function(wrap_pyfunction!(lenient_checks, m)?)?;
+    m.add_class::<PyReadWarning>()?;
     m.add_class::<PyQvdSchema>()?;
     m.add_class::<PyFieldInfo>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

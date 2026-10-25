@@ -46,14 +46,19 @@ openqvd = { version = "1", features = ["arrow"] }
 ```
 
 ```rust
-use openqvd::Qvd;
+use openqvd::{Qvd, ReadOptions};
 
-let qvd = Qvd::from_path("data.qvd").unwrap();
+let qvd = Qvd::open("data.qvd", &ReadOptions::default()).unwrap();
 println!("{} rows", qvd.num_rows());
 for row in qvd.rows() {
-    // row: Vec<Option<Value>>
+    let row = row.unwrap(); // Vec<Option<Value>>; Err on a corrupt file
 }
 ```
+
+Reading is strict by default. `ReadOptions` carries the column projection and
+a `Leniency` set naming the checks a caller accepts skipping; each tolerated
+deviation is reported through `Qvd::warnings()`. Errors are `QvdError` with
+a typed `kind()`. Public enums and data structs are `#[non_exhaustive]`.
 
 ### Reader
 

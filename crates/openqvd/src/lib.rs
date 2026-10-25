@@ -7,19 +7,25 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use openqvd::Qvd;
+//! use openqvd::{Qvd, ReadOptions};
 //!
-//! let qvd = Qvd::from_path("data.qvd").unwrap();
+//! let qvd = Qvd::open("data.qvd", &ReadOptions::default()).unwrap();
 //! println!("table {:?} with {} rows", qvd.table_name(), qvd.num_rows());
 //! for row in qvd.rows() {
+//!     let row = row.unwrap();
 //!     for (field, value) in qvd.fields().iter().zip(row) {
 //!         println!("  {} = {:?}", field.name, value);
 //!     }
 //! }
 //! ```
 //!
-//! The reader is strict: any deviation from the spec produces a
-//! [`QvdError`] rather than silent misinterpretation.
+//! The reader is strict by default: any deviation from the spec produces a
+//! [`QvdError`] rather than silent misinterpretation. [`ReadOptions`] carries
+//! an explicit [`Leniency`] for the few checks a caller may choose to skip;
+//! everything a lenient read tolerates is reported as a [`Warning`].
+//!
+//! All public enums and data structs are `#[non_exhaustive]` and gain
+//! variants and fields in minor releases: keep a wildcard arm when matching.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -27,9 +33,11 @@
 
 mod error;
 mod header;
+mod options;
 mod reader;
 mod symbols;
 mod value;
+mod warning;
 mod writer;
 
 pub(crate) mod bytes;
@@ -37,10 +45,12 @@ pub(crate) mod bytes;
 #[cfg(feature = "arrow")]
 mod arrow;
 
-pub use error::QvdError;
+pub use error::{ErrorKind, QvdError};
 pub use header::{FieldHeader, NumberFormat, TableHeader};
-pub use reader::{CheckedRowIter, Qvd};
-pub use value::{Dual, Value};
+pub use options::{Leniency, LenientCheck, ReadOptions, UnknownCheck, WriteOptions};
+pub use reader::Qvd;
+pub use value::{Cell, Dual, Value};
+pub use warning::{Warning, WarningKind};
 pub use writer::{Column, WriteTable};
 
 #[cfg(feature = "arrow")]

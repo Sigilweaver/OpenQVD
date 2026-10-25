@@ -49,6 +49,7 @@ DuckDB integration::
 
 from __future__ import annotations
 
+import warnings as _warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Union
 
@@ -58,9 +59,24 @@ from openqvd._openqvd import (  # noqa: F401
     Schema,
     __version__,
     read as _read,
-    schema,
+    schema as _schema,
     write as _write,
 )
+from openqvd.exceptions import (  # noqa: F401
+    QvdConversionError,
+    QvdError,
+    QvdFileNotFoundError,
+    QvdFormatError,
+    QvdHeaderError,
+    QvdIOError,
+    QvdPermissionError,
+    QvdSchemaError,
+    QvdStructureError,
+    QvdSymbolError,
+    QvdUnsupportedError,
+    QvdWarning,
+)
+from openqvd.options import Leniency, LeniencyLike, ReadWarning, _check_names
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -72,8 +88,54 @@ __all__ = [
     "schema",
     "Schema",
     "FieldInfo",
+    "Leniency",
+    "LeniencyLike",
+    "ReadWarning",
+    "QvdError",
+    "QvdIOError",
+    "QvdFileNotFoundError",
+    "QvdPermissionError",
+    "QvdFormatError",
+    "QvdHeaderError",
+    "QvdStructureError",
+    "QvdSymbolError",
+    "QvdSchemaError",
+    "QvdConversionError",
+    "QvdUnsupportedError",
+    "QvdWarning",
     "__version__",
 ]
+
+
+def schema(path: Union[str, Path], *, leniency: LeniencyLike = None) -> Schema:
+    """Read a QVD file's metadata without decoding symbol tables or rows.
+
+    Parameters
+    ----------
+    path:
+        Path to the ``.qvd`` file.
+    leniency:
+        A :class:`Leniency` (or iterable of check names) naming the checks
+        that may be skipped. ``None`` (default) is strict.
+
+    Returns
+    -------
+    Schema
+        ``.table_name``, ``.num_rows``, ``.fields`` and ``.warnings``.
+
+    Raises
+    ------
+    QvdError
+        If the file is not a valid QVD. See :mod:`openqvd.exceptions`.
+    """
+    result = _schema(str(path), _check_names(leniency))
+    _emit_warnings(result.warnings)
+    return result
+
+
+def _emit_warnings(found: List[ReadWarning]) -> None:
+    for w in found:
+        _warnings.warn(str(w), QvdWarning, stacklevel=3)
 
 
 def read(
@@ -81,6 +143,7 @@ def read(
     *,
     columns: Optional[List[str]] = None,
     filters: Optional[List[dict]] = None,
+    leniency: LeniencyLike = None,
 ) -> "pa.Table":
     """Read a QVD file as a PyArrow Table.
 
@@ -103,6 +166,10 @@ def read(
 
         Filters are resolved against the column's symbol table *before*
         row iteration, so non-matching rows are skipped efficiently.
+    leniency:
+        A :class:`Leniency` (or iterable of check names) naming the checks
+        that may be skipped. ``None`` (default) is strict. Every deviation a
+        lenient read tolerates is reported with :class:`QvdWarning`.
 
     Returns
     -------
@@ -111,10 +178,14 @@ def read(
 
     Raises
     ------
-    FileNotFoundError
-        If ``path`` does not exist.
-    ValueError
-        If the file is not a valid QVD, or a requested column is not found.
+    QvdFileNotFoundError
+        If ``path`` does not exist (also a :class:`FileNotFoundError`).
+    QvdFormatError
+        If the file is not a valid QVD.
+    QvdSchemaError
+        If a requested column is not found.
+    QvdError
+        Base class of all of the above (and a :class:`ValueError`).
 
     Examples
     --------
@@ -125,7 +196,8 @@ def read(
     """
     import pyarrow as pa
 
-    batch = _read(str(path), columns, filters)
+    batch, found = _read(str(path), columns, filters, _check_names(leniency))
+    _emit_warnings(found)
     return pa.table(batch)
 
 
@@ -134,6 +206,7 @@ def write(
     path: Union[str, Path],
     *,
     table_name: Optional[str] = None,
+    leniency: LeniencyLike = None,
 ) -> None:
     """Write a PyArrow Table or RecordBatch to a QVD file.
 
@@ -146,6 +219,9 @@ def write(
     table_name:
         Logical table name stored in the QVD header.  Defaults to the
         file stem of ``path``.
+    leniency:
+        A :class:`Leniency` (or iterable of check names) naming the checks
+        that may be skipped. ``None`` (default) is strict.
 
     Examples
     --------
@@ -164,4 +240,4 @@ def write(
             # Empty table: build an empty RecordBatch from the schema.
             arrays = [pa.array([], type=f.type) for f in data.schema]
             data = pa.record_batch(arrays, schema=data.schema)
-    _write(data, str(path), table_name)
+    _write(data, str(path), table_name, _check_names(leniency))

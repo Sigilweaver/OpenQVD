@@ -40,6 +40,8 @@ const QLIK_EPOCH_OFFSET: i32 = 25_569;
 /// iteration, so only rows where every filtered column's packed index
 /// matches a satisfying symbol are emitted. This avoids decoding
 /// non-matching rows entirely.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum ColumnFilter {
     /// Keep rows where the column value equals this string exactly.
     Eq(String),
@@ -54,11 +56,23 @@ pub enum ColumnFilter {
 }
 
 /// A named filter: column name + predicate.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Filter {
     /// Column name.
     pub column: String,
     /// The predicate to apply.
     pub predicate: ColumnFilter,
+}
+
+impl Filter {
+    /// A filter applying `predicate` to the column called `column`.
+    pub fn new(column: impl Into<String>, predicate: ColumnFilter) -> Self {
+        Self {
+            column: column.into(),
+            predicate,
+        }
+    }
 }
 
 /// Resolve a `ColumnFilter` against a symbol table, returning the set of
@@ -151,7 +165,9 @@ pub fn to_record_batch(
                 qvd.fields()
                     .iter()
                     .position(|f| f.name == *n)
-                    .ok_or_else(|| QvdError::structure(format!("column {n:?} not found")))
+                    .ok_or_else(|| QvdError::ColumnNotFound {
+                        name: (*n).to_owned(),
+                    })
             })
             .collect::<Result<_, _>>()?,
     };
@@ -166,8 +182,8 @@ pub fn to_record_batch(
                     .fields()
                     .iter()
                     .position(|fh| fh.name == f.column)
-                    .ok_or_else(|| {
-                        QvdError::structure(format!("filter column {:?} not found", f.column))
+                    .ok_or_else(|| QvdError::ColumnNotFound {
+                        name: f.column.clone(),
                     })?;
                 let symbols = qvd.symbols(field_idx).unwrap_or(&[]);
                 let (passing_indices, null_passes) = resolve_filter(symbols, &f.predicate);
@@ -210,12 +226,14 @@ pub fn to_record_batch(
     // Iterate rows once, applying predicate pushdown.
     if resolved_filters.is_empty() {
         for row in qvd.rows() {
+            let row = row?;
             for (out, &in_idx) in col_indices.iter().enumerate() {
                 builders[out].append(&row[in_idx], &dtypes[out]);
             }
         }
     } else {
         'row: for row in qvd.rows() {
+            let row = row?;
             // Check all filter predicates.
             for rf in &resolved_filters {
                 let cell = &row[rf.field_idx];
@@ -251,7 +269,9 @@ pub fn to_record_batch(
     // Finish arrays.
     let arrays: Vec<ArrayRef> = builders.into_iter().map(BuilderEnum::finish).collect();
 
-    RecordBatch::try_new(schema, arrays).map_err(|e| QvdError::structure(e.to_string()))
+    RecordBatch::try_new(schema, arrays).map_err(|e| QvdError::Arrow {
+        detail: e.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +490,7 @@ impl Qvd {
 // Arrow -> WriteTable (for write support from Python)
 // ---------------------------------------------------------------------------
 
+use crate::options::WriteOptions;
 use crate::value::Dual;
 use crate::writer::{Column, WriteTable};
 
@@ -485,7 +506,7 @@ use crate::writer::{Column, WriteTable};
 /// `Value::Str`.
 pub fn record_batch_to_write_table(
     batch: &RecordBatch,
-    table_name: &str,
+    options: &WriteOptions,
 ) -> Result<WriteTable, QvdError> {
     use arrow_array::{cast::AsArray, types::*, Array};
 
@@ -632,10 +653,12 @@ pub fn record_batch_to_write_table(
             }
             DataType::Boolean => {
                 use arrow_array::BooleanArray;
-                let a = arr
-                    .as_any()
-                    .downcast_ref::<BooleanArray>()
-                    .ok_or_else(|| QvdError::structure("arrow: expected BooleanArray"))?;
+                let a =
+                    arr.as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .ok_or_else(|| QvdError::Arrow {
+                            detail: "expected BooleanArray".to_owned(),
+                        })?;
                 for i in 0..n {
                     cells.push(if a.is_null(i) {
                         None
@@ -682,13 +705,14 @@ pub fn record_batch_to_write_table(
                 // Fallback: use Arrow cast to LargeUtf8.
                 use arrow_cast::cast;
                 use arrow_schema::DataType as DT;
-                let str_arr = cast(arr.as_ref(), &DT::LargeUtf8)
-                    .map_err(|e| QvdError::structure(e.to_string()))?;
+                let str_arr = cast(arr.as_ref(), &DT::LargeUtf8).map_err(|e| QvdError::Arrow {
+                    detail: e.to_string(),
+                })?;
                 let a = str_arr
                     .as_any()
                     .downcast_ref::<arrow_array::LargeStringArray>()
-                    .ok_or_else(|| {
-                        QvdError::structure("arrow: cast to LargeUtf8 produced unexpected type")
+                    .ok_or_else(|| QvdError::Arrow {
+                        detail: "cast to LargeUtf8 produced unexpected type".to_owned(),
                     })?;
                 for i in 0..n {
                     cells.push(if a.is_null(i) {
@@ -706,7 +730,7 @@ pub fn record_batch_to_write_table(
         columns.push(col);
     }
 
-    WriteTable::new(table_name, columns)
+    WriteTable::new(options.table_name.clone(), columns)
 }
 
 fn arrow_type_to_nf(dt: &DataType) -> &'static str {

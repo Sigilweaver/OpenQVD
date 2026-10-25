@@ -3,8 +3,10 @@ use std::path::Path;
 
 use crate::error::QvdError;
 use crate::header::{parse, FieldHeader, TableHeader};
+use crate::options::ReadOptions;
 use crate::symbols::decode_field_symbols;
 use crate::value::{Cell, Value};
+use crate::warning::Warning;
 
 /// Upper bound on how many rows [`Qvd::to_write_table`] will eagerly
 /// pre-allocate `Vec` capacity for, per column. 256 MiB worth of `Cell`s is
@@ -32,59 +34,59 @@ fn xml_escape(s: &str) -> String {
 
 /// An in-memory QVD file with headers, symbol tables, and the packed row
 /// index block.
+///
+/// Open one with [`Qvd::open`] or [`Qvd::parse`]. Strict reading is the
+/// default; see [`ReadOptions`].
 #[derive(Debug)]
 pub struct Qvd {
     header: TableHeader,
-    header_bytes: usize,
     /// The bytes of the file after the header terminator.
     body: Vec<u8>,
     /// One decoded symbol table per field, in field order.
     symbol_tables: Vec<Vec<Value>>,
+    /// Whether each field's symbol table was decoded (false for fields
+    /// outside `ReadOptions::columns`).
+    decoded: Vec<bool>,
+    /// Deviations tolerated because `ReadOptions::leniency` allowed them.
+    warnings: Vec<Warning>,
 }
 
 impl Qvd {
     /// Read and parse a QVD file from disk.
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, QvdError> {
+    pub fn open(path: impl AsRef<Path>, options: &ReadOptions) -> Result<Self, QvdError> {
         let bytes = fs::read(path.as_ref())?;
-        Self::from_bytes(bytes)
-    }
-
-    /// Read and parse a QVD file from disk, decoding only the listed columns.
-    ///
-    /// See [`Self::from_bytes_projected`] for details.
-    pub fn from_path_projected(path: impl AsRef<Path>, needed: &[&str]) -> Result<Self, QvdError> {
-        let bytes = fs::read(path.as_ref())?;
-        Self::from_bytes_projected(bytes, needed)
+        Self::parse(bytes, options)
     }
 
     /// Parse a QVD file from a byte vector already in memory.
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, QvdError> {
-        Self::from_bytes_impl(bytes, None)
-    }
-
-    /// Parse a QVD file, decoding symbol tables only for the named columns.
     ///
-    /// Columns not in `needed` get an empty symbol table (every cell will
-    /// resolve to `None`).  This avoids the cost of decoding large string
-    /// symbol tables for columns that will never be read.
-    pub fn from_bytes_projected(bytes: Vec<u8>, needed: &[&str]) -> Result<Self, QvdError> {
-        Self::from_bytes_impl(bytes, Some(needed))
-    }
-
-    fn from_bytes_impl(bytes: Vec<u8>, needed: Option<&[&str]>) -> Result<Self, QvdError> {
+    /// When `options.columns` is set, symbol tables are decoded only for the
+    /// named columns; the others keep an empty table and must not be read.
+    /// This avoids decoding large string tables that will never be used.
+    pub fn parse(mut bytes: Vec<u8>, options: &ReadOptions) -> Result<Self, QvdError> {
         let (header, header_bytes) = parse(&bytes)?;
-        let body: Vec<u8> = bytes[header_bytes..].to_vec();
+        let body: Vec<u8> = bytes.split_off(header_bytes);
+        drop(bytes);
+
+        if let Some(names) = &options.columns {
+            for n in names {
+                if !header.fields.iter().any(|f| f.name == *n) {
+                    return Err(QvdError::ColumnNotFound { name: n.clone() });
+                }
+            }
+        }
+        let warnings: Vec<Warning> = Vec::new();
 
         // Structural invariants required by the spec.
         let expected_len = header
             .no_of_records
             .checked_mul(header.record_byte_size)
-            .ok_or_else(|| QvdError::structure("n_records * record_byte_size overflow"))?;
+            .ok_or(QvdError::RowBlockSizeOverflow)?;
         if expected_len != header.row_block_length {
-            return Err(QvdError::structure(format!(
-                "row block length {} != n_records * record_byte_size {}",
-                header.row_block_length, expected_len
-            )));
+            return Err(QvdError::RowBlockLengthMismatch {
+                declared: header.row_block_length,
+                expected: expected_len,
+            });
         }
         // Bit-field coverage check.
         let total_bits = header.record_byte_size.saturating_mul(8);
@@ -93,33 +95,38 @@ impl Qvd {
             if f.bit_width == 0 {
                 continue;
             }
+            let out_of_range = || QvdError::FieldBitsOutOfRange {
+                field: f.name.clone(),
+                bit_offset: f.bit_offset,
+                bit_width: f.bit_width,
+                record_bits: total_bits,
+            };
             let end = f
                 .bit_offset
                 .checked_add(f.bit_width)
-                .ok_or_else(|| QvdError::structure("bit_offset+bit_width overflow"))?;
+                .ok_or_else(out_of_range)?;
             if end > total_bits {
-                return Err(QvdError::structure(format!(
-                    "field {:?} bits [{}..{}) exceed record size {} bits",
-                    f.name, f.bit_offset, end, total_bits
-                )));
+                return Err(out_of_range());
             }
             for b in f.bit_offset..end {
                 if used[b as usize] {
-                    return Err(QvdError::structure(format!(
-                        "field {:?} overlaps another at bit {}",
-                        f.name, b
-                    )));
+                    return Err(QvdError::FieldBitsOverlap {
+                        field: f.name.clone(),
+                        bit: b,
+                    });
                 }
                 used[b as usize] = true;
             }
         }
 
         let mut symbol_tables = Vec::with_capacity(header.fields.len());
+        let mut decoded = Vec::with_capacity(header.fields.len());
         for f in &header.fields {
-            let dominated = match needed {
+            let dominated = match &options.columns {
                 None => false,
-                Some(names) => !names.iter().any(|n| *n == f.name),
+                Some(names) => !names.contains(&f.name),
             };
+            decoded.push(!dominated);
             if dominated {
                 symbol_tables.push(Vec::new());
             } else {
@@ -128,23 +135,22 @@ impl Qvd {
         }
 
         // Row block must lie within the body.
-        let row_end = (header.row_block_offset as usize)
-            .checked_add(header.row_block_length as usize)
-            .ok_or_else(|| QvdError::structure("row block offset+length overflow"))?;
-        if row_end > body.len() {
-            return Err(QvdError::structure(format!(
-                "row block [{}..{}) exceeds body len {}",
-                header.row_block_offset,
-                row_end,
-                body.len()
-            )));
+        let row_start = u64::from(header.row_block_offset);
+        let row_end = row_start + u64::from(header.row_block_length);
+        if row_end > body.len() as u64 {
+            return Err(QvdError::RowBlockOutOfRange {
+                start: row_start,
+                end: row_end,
+                body_len: body.len(),
+            });
         }
 
         Ok(Self {
             header,
-            header_bytes,
             body,
             symbol_tables,
+            decoded,
+            warnings,
         })
     }
 
@@ -168,27 +174,27 @@ impl Qvd {
         &self.header
     }
 
-    /// Byte length of the XML header including the trailing `0x00`.
-    pub fn header_size(&self) -> usize {
-        self.header_bytes
+    /// Deviations that a lenient read tolerated. Always empty for a strict
+    /// read.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
 
     /// Decoded symbol table for the given field index.
-    pub fn symbols(&self, field_index: usize) -> Option<&[Value]> {
+    pub(crate) fn symbols(&self, field_index: usize) -> Option<&[Value]> {
         self.symbol_tables.get(field_index).map(|v| v.as_slice())
     }
 
     /// Iterate rows. Each row is a `Vec<Cell>` with one entry per field in
-    /// the same order as [`Self::fields`]. `None` denotes a NULL.
-    pub fn rows(&self) -> RowIter<'_> {
-        RowIter { qvd: self, next: 0 }
-    }
-
-    /// Iterate rows, returning a `Result` for each. An out-of-range symbol
-    /// index that the infallible [`Self::rows`] iterator would swallow as
-    /// `None` is surfaced here as a [`QvdError`].
-    pub fn checked_rows(&self) -> CheckedRowIter<'_> {
-        CheckedRowIter { qvd: self, next: 0 }
+    /// the same order as [`Self::fields`]. `None` denotes a NULL. Fields
+    /// left out of `ReadOptions::columns` were not decoded and also read as
+    /// `None`; do not read them.
+    ///
+    /// A row that refers to a symbol that does not exist yields
+    /// `Err(QvdError::SymbolIndexOutOfRange { .. })`; corruption is never
+    /// turned into a NULL.
+    pub fn rows(&self) -> impl Iterator<Item = Result<Vec<Cell>, QvdError>> + '_ {
+        Rows { qvd: self, next: 0 }
     }
 
     /// Write the QVD back to a byte vector, re-using the already-parsed body
@@ -298,7 +304,7 @@ impl Qvd {
     /// Materialise this QVD as a [`crate::WriteTable`], one column per
     /// field, in the same order. Useful for round-trip testing and
     /// programmatic rewriting.
-    pub fn to_write_table(&self) -> crate::WriteTable {
+    pub fn to_write_table(&self) -> Result<crate::WriteTable, QvdError> {
         let n_rows = self.num_rows() as usize;
         // `no_of_records` is bounded by the actual row block size in
         // `from_bytes_impl` whenever `record_byte_size > 0` (row_block_length
@@ -323,25 +329,22 @@ impl Qvd {
             })
             .collect();
         for row in self.rows() {
-            for (i, cell) in row.into_iter().enumerate() {
+            for (i, cell) in row?.into_iter().enumerate() {
                 columns[i].cells.push(cell);
             }
         }
-        crate::WriteTable {
-            name: self.header.table_name.clone(),
-            columns,
-        }
+        crate::WriteTable::new(self.header.table_name.clone(), columns)
     }
 }
 
 /// Iterator over decoded rows.
-pub struct RowIter<'a> {
+struct Rows<'a> {
     qvd: &'a Qvd,
     next: u32,
 }
 
-impl<'a> Iterator for RowIter<'a> {
-    type Item = Vec<Cell>;
+impl Iterator for Rows<'_> {
+    type Item = Result<Vec<Cell>, QvdError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next >= self.qvd.header.no_of_records {
@@ -357,56 +360,11 @@ impl<'a> Iterator for RowIter<'a> {
         let rec_int = le_bits_to_u128(rec);
         let mut out: Vec<Cell> = Vec::with_capacity(self.qvd.header.fields.len());
         for (i, f) in self.qvd.header.fields.iter().enumerate() {
-            let stored = if f.bit_width == 0 {
-                0
-            } else if rbs * 8 <= 128 {
-                let mask = if f.bit_width == 128 {
-                    u128::MAX
-                } else {
-                    (1u128 << f.bit_width) - 1
-                };
-                ((rec_int >> f.bit_offset) & mask) as i128
-            } else {
-                extract_bits_wide(rec, f.bit_offset, f.bit_width) as i128
-            };
-            let index = stored + f.bias as i128;
-            if index < 0 {
+            if !self.qvd.decoded[i] {
+                // Projected out: no symbol table to resolve against.
                 out.push(None);
-            } else if index as usize >= self.qvd.symbol_tables[i].len() {
-                // Per spec this is a corruption error. We still want the
-                // iterator to be infallible, so we encode this as None.
-                // Callers that care should use the checked API in a future
-                // stage.
-                out.push(None);
-            } else {
-                out.push(Some(self.qvd.symbol_tables[i][index as usize].clone()));
+                continue;
             }
-        }
-        Some(out)
-    }
-}
-
-/// Checked iterator over decoded rows.
-pub struct CheckedRowIter<'a> {
-    qvd: &'a Qvd,
-    next: u32,
-}
-
-impl<'a> Iterator for CheckedRowIter<'a> {
-    type Item = Result<Vec<Cell>, QvdError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next >= self.qvd.header.no_of_records {
-            return None;
-        }
-        let idx = self.next as usize;
-        self.next += 1;
-        let rbs = self.qvd.header.record_byte_size as usize;
-        let rows_off = self.qvd.header.row_block_offset as usize;
-        let rec = &self.qvd.body[rows_off + idx * rbs..rows_off + (idx + 1) * rbs];
-        let rec_int = le_bits_to_u128(rec);
-        let mut out: Vec<Cell> = Vec::with_capacity(self.qvd.header.fields.len());
-        for (i, f) in self.qvd.header.fields.iter().enumerate() {
             let stored = if f.bit_width == 0 {
                 0
             } else if rbs * 8 <= 128 {
@@ -427,11 +385,12 @@ impl<'a> Iterator for CheckedRowIter<'a> {
                 match self.qvd.symbol_tables[i].get(ui) {
                     Some(v) => out.push(Some(v.clone())),
                     None => {
-                        return Some(Err(QvdError::structure(format!(
-                            "row {idx}: field {:?} symbol index {ui} is out of range (n={})",
-                            f.name,
-                            self.qvd.symbol_tables[i].len()
-                        ))));
+                        return Some(Err(QvdError::SymbolIndexOutOfRange {
+                            row: idx as u64,
+                            field: f.name.clone(),
+                            index: ui as u64,
+                            symbols: self.qvd.symbol_tables[i].len(),
+                        }));
                     }
                 }
             }

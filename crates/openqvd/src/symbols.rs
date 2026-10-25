@@ -8,15 +8,14 @@ pub(crate) fn decode_field_symbols(
     field: &FieldHeader,
 ) -> Result<Vec<Value>, QvdError> {
     let start = field.offset as usize;
-    let end = start
-        .checked_add(field.length as usize)
-        .ok_or_else(|| QvdError::structure("field offset+length overflow"))?;
+    let end = start.saturating_add(field.length as usize);
     if end > body.len() {
-        return Err(QvdError::structure(format!(
-            "field {:?} symbol region [{start}..{end}) exceeds body len {}",
-            field.name,
-            body.len()
-        )));
+        return Err(QvdError::SymbolRegionOutOfRange {
+            field: field.name.clone(),
+            start: start as u64,
+            end: end as u64,
+            body_len: body.len(),
+        });
     }
     let region = &body[start..end];
     let mut cursor = 0usize;
@@ -29,21 +28,19 @@ pub(crate) fn decode_field_symbols(
     let mut out: Vec<Value> = Vec::with_capacity((field.no_of_symbols as usize).min(region.len()));
     for _ in 0..field.no_of_symbols {
         if cursor >= region.len() {
-            return Err(QvdError::structure(format!(
-                "field {:?}: ran out of symbol bytes",
-                field.name
-            )));
+            return Err(QvdError::SymbolTableTruncated {
+                field: field.name.clone(),
+            });
         }
         let (value, next) = read_symbol(region, cursor, body_offset_in_file + start)?;
         cursor = next;
         out.push(value);
     }
     if cursor != region.len() {
-        return Err(QvdError::structure(format!(
-            "field {:?}: {} trailing bytes in symbol region",
-            field.name,
-            region.len() - cursor
-        )));
+        return Err(QvdError::SymbolTableTrailingBytes {
+            field: field.name.clone(),
+            extra: region.len() - cursor,
+        });
     }
     Ok(out)
 }
@@ -69,7 +66,9 @@ fn read_symbol(
                 .iter()
                 .position(|&b| b == 0)
                 .map(|i| p + i)
-                .ok_or_else(|| QvdError::structure("unterminated string symbol"))?;
+                .ok_or(QvdError::UnterminatedString {
+                    what: "string symbol",
+                })?;
             let s = std::str::from_utf8(&region[p..end])
                 .map_err(|_| QvdError::Utf8 {
                     offset: region_file_offset + start,
@@ -84,7 +83,9 @@ fn read_symbol(
                 .iter()
                 .position(|&b| b == 0)
                 .map(|i| s_start + i)
-                .ok_or_else(|| QvdError::structure("unterminated dual-int string"))?;
+                .ok_or(QvdError::UnterminatedString {
+                    what: "dual-int string",
+                })?;
             let text = std::str::from_utf8(&region[s_start..end])
                 .map_err(|_| QvdError::Utf8 {
                     offset: region_file_offset + start,
@@ -99,7 +100,9 @@ fn read_symbol(
                 .iter()
                 .position(|&b| b == 0)
                 .map(|i| s_start + i)
-                .ok_or_else(|| QvdError::structure("unterminated dual-float string"))?;
+                .ok_or(QvdError::UnterminatedString {
+                    what: "dual-float string",
+                })?;
             let text = std::str::from_utf8(&region[s_start..end])
                 .map_err(|_| QvdError::Utf8 {
                     offset: region_file_offset + start,
@@ -145,6 +148,9 @@ mod tests {
         let body = [0x04, 0x00]; // one empty string symbol, 2 bytes
         let f = field(u32::MAX, body.len() as u32);
         let err = decode_field_symbols(&body, 0, &f).unwrap_err();
-        assert!(err.to_string().contains("ran out of symbol bytes"), "{err}");
+        assert!(
+            matches!(err, QvdError::SymbolTableTruncated { .. }),
+            "{err}"
+        );
     }
 }
