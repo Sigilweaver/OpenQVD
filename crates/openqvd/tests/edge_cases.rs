@@ -393,7 +393,7 @@ fn lf_terminator_accepted() {
 
 /// A hand-built record pointing at a symbol index that is out of range.
 #[test]
-fn rows_error_on_out_of_range_index() {
+fn out_of_range_index_is_rejected_at_open() {
     // One field, 2 bits, 2 symbols (indices 0 and 1).
     // We'll craft a row whose stored value is 3 (out of range).
     let sym_int = |v: i32| -> Vec<u8> {
@@ -441,11 +441,9 @@ fn rows_error_on_out_of_range_index() {
     bytes.extend(&sym_block);
     bytes.extend(&row_block);
 
-    let q = parse(bytes).unwrap();
-
-    // rows() reports the corruption instead of turning it into a NULL.
-    let results: Vec<_> = q.rows().collect();
-    let err = results[0].as_ref().unwrap_err();
+    // The corruption is reported when the file is opened, so neither rows()
+    // nor any conversion can turn it into a NULL.
+    let err = parse(bytes).unwrap_err();
     assert!(
         matches!(
             err,

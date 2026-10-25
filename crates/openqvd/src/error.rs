@@ -155,6 +155,78 @@ pub enum QvdError {
         body_len: usize,
     },
 
+    /// Bytes follow the row block.
+    #[error("invalid QVD structure: {extra} trailing bytes after the row block")]
+    TrailingBytes {
+        /// Number of bytes after the declared row block.
+        extra: u64,
+    },
+
+    /// A field is wider than any symbol index can need.
+    #[error(
+        "invalid QVD structure: field {field:?} BitWidth {bit_width} exceeds the maximum {max}"
+    )]
+    BitWidthOutOfRange {
+        /// Field name.
+        field: String,
+        /// `BitWidth`.
+        bit_width: u32,
+        /// The widest accepted field.
+        max: u32,
+    },
+
+    /// A field uses a `Bias` other than the two the format is known to use.
+    #[error("unsupported QVD feature: field {field:?} has Bias {bias}; only 0 and -2 are known")]
+    UnsupportedBias {
+        /// Field name.
+        field: String,
+        /// `Bias`.
+        bias: i32,
+    },
+
+    /// A symbol table lies (partly) inside the row block.
+    #[error(
+        "invalid QVD structure: field {field:?} symbol region [{start}..{end}) reaches the row block at {row_block_start}"
+    )]
+    SymbolRegionInRowBlock {
+        /// Field name.
+        field: String,
+        /// First byte of the region.
+        start: u64,
+        /// One past the last byte.
+        end: u64,
+        /// First byte of the row block.
+        row_block_start: u64,
+    },
+
+    /// Two symbol tables overlap.
+    #[error("invalid QVD structure: field {field:?} symbol region at {start} overlaps another")]
+    SymbolRegionOverlap {
+        /// Field name.
+        field: String,
+        /// First byte of the region.
+        start: u64,
+    },
+
+    /// Bytes between symbol tables, or between the last table and the row
+    /// block, belong to no field.
+    #[error("invalid QVD structure: bytes [{start}..{end}) in front of the row block belong to no symbol table")]
+    SymbolRegionGap {
+        /// First unclaimed byte.
+        start: u64,
+        /// One past the last unclaimed byte.
+        end: u64,
+    },
+
+    /// A record has a bit set that no field claims.
+    #[error("invalid QVD structure: row {row} byte {byte} has bits set outside every field")]
+    UnusedBitsSet {
+        /// Zero-based row.
+        row: u64,
+        /// Byte within the record.
+        byte: u32,
+    },
+
     /// A field's bit range does not fit in a record, or overflows.
     #[error(
         "invalid QVD structure: field {field:?} bits [{bit_offset}..+{bit_width}) exceed record size {record_bits} bits"
@@ -342,7 +414,7 @@ impl QvdError {
             | UnknownEntity { .. }
             | Xml { .. }
             | InvalidHeaderValue { .. } => ErrorKind::Header,
-            UnsupportedCompression { .. } => ErrorKind::Unsupported,
+            UnsupportedCompression { .. } | UnsupportedBias { .. } => ErrorKind::Unsupported,
             RowBlockSizeOverflow
             | RowBlockLengthMismatch { .. }
             | RowBlockOutOfRange { .. }
@@ -351,7 +423,13 @@ impl QvdError {
             | SymbolRegionOutOfRange { .. }
             | SymbolTableTruncated { .. }
             | SymbolTableTrailingBytes { .. }
-            | SymbolIndexOutOfRange { .. } => ErrorKind::Structure,
+            | SymbolIndexOutOfRange { .. }
+            | TrailingBytes { .. }
+            | BitWidthOutOfRange { .. }
+            | SymbolRegionInRowBlock { .. }
+            | SymbolRegionOverlap { .. }
+            | SymbolRegionGap { .. }
+            | UnusedBitsSet { .. } => ErrorKind::Structure,
             Truncated { .. }
             | UnterminatedString { .. }
             | UnknownSymbolType { .. }

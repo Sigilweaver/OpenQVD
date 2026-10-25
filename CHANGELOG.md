@@ -74,6 +74,18 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Symbol-table placement was checked only against the whole file. Each table must
+  now lie in front of the row block, and the tables must tile that region
+  exactly, with no overlap and no gap (S1-9).
+- `Bias` values other than 0 and -2 decoded "successfully" with shifted or
+  NULL indices; they are now `UnsupportedBias` (S1-10).
+- `BitWidth` was not range-checked, so a wide field truncated the symbol index.
+  Widths above 33 (a u32 symbol count plus a bias of 2) are an error (S1-11).
+- A symbol index outside its table became a NULL in `rows()`, `to_write_table`,
+  Arrow conversion and the CLI. Every decoded column's indices are checked once
+  when the file opens, so the corruption is an error everywhere (S2-1).
+- Bits in a record that no field claims must be zero (S3-1), and bytes after the
+  row block are an error (S3-2). Both detect a misread layout.
 - XML entity references and CDATA in the header were silently deleted:
   `P&amp;L` read as `PL` and `Customer&apos;s` as `Customers`. Predefined
   entities, numeric character references and CDATA are resolved; any other
@@ -113,6 +125,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `view_name` without `con` is a `ValueError`.
 
 ### Behavior changes
+
+- A file now fails to open if: a symbol index is out of range; a field's
+  `Bias` is not 0 or -2; its `BitWidth` is above 33; symbol tables overlap,
+  leave gaps, or reach the row block; a record has unclaimed bits set; or bytes
+  follow the row block. None of the 1,044 readable corpus files is affected.
+- `Qvd::open` does one pass over the row block to validate it. Opening with
+  `ReadOptions::columns` skips the index check for columns that are not
+  decoded; `schema()` in Python decodes none.
 
 - Files whose header lacks any numeric element, repeats one, has a non-empty
   `<Compression>`, or uses an undefined XML entity no longer open. None of the
