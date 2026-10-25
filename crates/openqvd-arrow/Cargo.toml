@@ -1,0 +1,33 @@
+[package]
+name = "openqvd-arrow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Arrow adapters for the openqvd QVD reader and writer, one version-named feature per Arrow major."
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# One feature per supported Arrow major. They can be enabled together; each
+# exposes a module of the same name (`arrow-60` -> `openqvd_arrow::v60`).
+# Supporting a new Arrow major is a new feature, not a new crate version line.
+arrow-59 = ["dep:arrow-array-59", "dep:arrow-schema-59", "dep:arrow-cast-59"]
+arrow-60 = ["dep:arrow-array-60", "dep:arrow-schema-60", "dep:arrow-cast-60"]
+
+[dependencies]
+openqvd = { version = "2.0.0", path = "../openqvd" }
+arrow-array-59 = { package = "arrow-array", version = "59", optional = true }
+arrow-schema-59 = { package = "arrow-schema", version = "59", optional = true }
+arrow-cast-59 = { package = "arrow-cast", version = "59", optional = true }
+arrow-array-60 = { package = "arrow-array", version = "60", optional = true }
+arrow-schema-60 = { package = "arrow-schema", version = "60", optional = true }
+arrow-cast-60 = { package = "arrow-cast", version = "60", optional = true }

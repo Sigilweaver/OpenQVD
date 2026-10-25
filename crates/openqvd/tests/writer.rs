@@ -70,7 +70,7 @@ fn round_trip_all_types() {
         Column::new(
             "df",
             vec![
-                Some(Value::DualFloat(Dual::new(3.14, "pi"))),
+                Some(Value::DualFloat(Dual::new(3.25, "pi"))),
                 Some(Value::DualFloat(Dual::new(2.72, "e"))),
             ],
         ),
@@ -82,7 +82,7 @@ fn round_trip_all_types() {
     assert_eq!(rows[0][1], Some(Value::Float(1.25)));
     assert_eq!(rows[0][2], s("hi"));
     assert!(matches!(&rows[0][3], Some(Value::DualInt(d)) if d.number == 10 && d.text == "ten"));
-    assert!(matches!(&rows[0][4], Some(Value::DualFloat(d)) if d.number == 3.14 && d.text == "pi"));
+    assert!(matches!(&rows[0][4], Some(Value::DualFloat(d)) if d.number == 3.25 && d.text == "pi"));
     assert_eq!(rows[1][2], s("bye"));
 }
 

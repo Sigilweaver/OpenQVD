@@ -27,7 +27,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
 
   python:
@@ -46,5 +46,21 @@ jobs:
         run: |
           uv venv
           uv pip install maturin pyarrow polars pandas pytest
+          uv run maturin develop --release
+          uv run pytest tests/ -v
+
+  python-floors:
+    name: Python at the declared minimum versions
+    # Keep in step with the extras in crates/openqvd-py/pyproject.toml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v7
+      - name: Build and test with pyarrow 15, polars 1.10, pandas 2.2, duckdb 1.2
+        working-directory: crates/openqvd-py
+        run: |
+          uv venv --python 3.12
+          uv pip install maturin pytest "numpy<2" pyarrow==15.0.0 polars==1.10.0 pandas==2.2.0 duckdb==1.2.0
           uv run maturin develop --release
           uv run pytest tests/ -v

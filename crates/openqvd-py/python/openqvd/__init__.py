@@ -3,10 +3,13 @@ openqvd - Clean-room reader/writer for Qlik QVD files.
 
 Quick start
 -----------
-Read as a PyArrow Table::
+Read a table. It implements the Arrow PyCapsule interface, so pyarrow,
+Polars, DuckDB and others accept it directly::
 
     import openqvd
     table = openqvd.read("data.qvd")
+    arrow_table = table.to_pyarrow()
+    polars_df = table.to_polars()
 
 Read selected columns only (projection pushdown)::
 
@@ -17,7 +20,7 @@ Inspect metadata without loading data::
     info = openqvd.schema("data.qvd")
     print(info.table_name, info.num_rows, [f.name for f in info.fields])
 
-Write from a PyArrow Table::
+Write any Arrow-compatible table (pyarrow, Polars, ...)::
 
     openqvd.write(table, "out.qvd")
     openqvd.write(table, "out.qvd", table_name="MyTable")
@@ -33,7 +36,7 @@ Convert to/from Polars::
 
 Convert to/from Pandas::
 
-    df = openqvd.read("data.qvd").to_pandas()
+    df = openqvd.read("data.qvd").to_pandas()  # needs pyarrow too
 
 DuckDB integration::
 
@@ -76,10 +79,11 @@ from openqvd.exceptions import (  # noqa: F401
     QvdUnsupportedError,
     QvdWarning,
 )
+from openqvd.table import Table
 from openqvd.options import Leniency, LeniencyLike, ReadWarning, _check_names
 
 if TYPE_CHECKING:
-    import pyarrow as pa
+    from typing import Any as ArrowData
 
 
 __all__ = [
@@ -88,6 +92,7 @@ __all__ = [
     "schema",
     "Schema",
     "FieldInfo",
+    "Table",
     "Leniency",
     "LeniencyLike",
     "ReadWarning",
@@ -144,8 +149,8 @@ def read(
     columns: Optional[List[str]] = None,
     filters: Optional[List[dict]] = None,
     leniency: LeniencyLike = None,
-) -> "pa.Table":
-    """Read a QVD file as a PyArrow Table.
+) -> Table:
+    """Read a QVD file.
 
     Parameters
     ----------
@@ -173,8 +178,9 @@ def read(
 
     Returns
     -------
-    pyarrow.Table
-        The decoded table data.
+    Table
+        The decoded data. It implements the Arrow PyCapsule interface and has
+        ``.to_pyarrow()``, ``.to_polars()`` and ``.to_pandas()``.
 
     Raises
     ------
@@ -194,26 +200,28 @@ def read(
     >>> table = openqvd.read("data.qvd", columns=["col1", "col2"])
     >>> table = openqvd.read("data.qvd", filters=[{"column": "Status", "op": "eq", "value": "Active"}])
     """
-    import pyarrow as pa
-
-    batch, found = _read(str(path), columns, filters, _check_names(leniency))
+    batches, found = _read(str(path), columns, filters, _check_names(leniency))
     _emit_warnings(found)
-    return pa.table(batch)
+    return Table(batches, found)
 
 
 def write(
-    data: "pa.Table | pa.RecordBatch",
+    data: "ArrowData",
     path: Union[str, Path],
     *,
     table_name: Optional[str] = None,
     leniency: LeniencyLike = None,
 ) -> None:
-    """Write a PyArrow Table or RecordBatch to a QVD file.
+    """Write Arrow data to a QVD file.
 
     Parameters
     ----------
     data:
-        PyArrow Table or RecordBatch to serialise.
+        Any object that exports Arrow data through the PyCapsule interface
+        (``__arrow_c_stream__`` or ``__arrow_c_array__``): a pyarrow Table,
+        RecordBatch or RecordBatchReader, a Polars DataFrame, an
+        :class:`openqvd.Table`, a DuckDB relation result, ... Every batch is
+        written.
     path:
         Destination file path.
     table_name:
@@ -229,15 +237,4 @@ def write(
     >>> t = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
     >>> openqvd.write(t, "out.qvd")
     """
-    import pyarrow as pa
-
-    if isinstance(data, pa.Table):
-        # Combine chunks so pyo3-arrow receives a single RecordBatch.
-        batches = data.combine_chunks().to_batches()
-        if batches:
-            data = batches[0]
-        else:
-            # Empty table: build an empty RecordBatch from the schema.
-            arrays = [pa.array([], type=f.type) for f in data.schema]
-            data = pa.record_batch(arrays, schema=data.schema)
     _write(data, str(path), table_name, _check_names(leniency))

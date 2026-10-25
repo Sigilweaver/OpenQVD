@@ -180,15 +180,24 @@ impl Qvd {
         &self.warnings
     }
 
+    /// Whether field `index` had its symbol table decoded (false for fields
+    /// outside `ReadOptions::columns`).
+    pub fn is_decoded(&self, index: usize) -> bool {
+        self.decoded.get(index).copied().unwrap_or(false)
+    }
+
     /// Decoded symbol table for the given field index.
     pub(crate) fn symbols(&self, field_index: usize) -> Option<&[Value]> {
         self.symbol_tables.get(field_index).map(|v| v.as_slice())
     }
 
     /// Iterate rows. Each row is a `Vec<Cell>` with one entry per field in
-    /// the same order as [`Self::fields`]. `None` denotes a NULL. Fields
-    /// left out of `ReadOptions::columns` were not decoded and also read as
-    /// `None`; do not read them.
+    /// the same order as [`Self::fields`]. `None` denotes a NULL.
+    ///
+    /// If any field was left out of `ReadOptions::columns` its symbol table
+    /// was never decoded, so the first item is
+    /// `Err(QvdError::FieldNotDecoded)` and the iterator ends. Use
+    /// [`Self::column`] for projected reads.
     ///
     /// A row that refers to a symbol that does not exist yields
     /// `Err(QvdError::SymbolIndexOutOfRange { .. })`; corruption is never
@@ -305,6 +314,11 @@ impl Qvd {
     /// field, in the same order. Useful for round-trip testing and
     /// programmatic rewriting.
     pub fn to_write_table(&self) -> Result<crate::WriteTable, QvdError> {
+        if let Some(i) = self.decoded.iter().position(|d| !d) {
+            return Err(QvdError::FieldNotDecoded {
+                field: self.header.fields[i].name.clone(),
+            });
+        }
         let n_rows = self.num_rows() as usize;
         // `no_of_records` is bounded by the actual row block size in
         // `from_bytes_impl` whenever `record_byte_size > 0` (row_block_length
@@ -350,54 +364,108 @@ impl Iterator for Rows<'_> {
         if self.next >= self.qvd.header.no_of_records {
             return None;
         }
+        if self.next == 0 {
+            // A column outside `ReadOptions::columns` has no symbol table.
+            // Reading it as NULL would be indistinguishable from real NULLs
+            // (and `to_write_table` would launder it into a valid file), so
+            // the first row reports it and the iterator ends.
+            if let Some(i) = self.qvd.decoded.iter().position(|d| !d) {
+                self.next = self.qvd.header.no_of_records;
+                return Some(Err(QvdError::FieldNotDecoded {
+                    field: self.qvd.header.fields[i].name.clone(),
+                }));
+            }
+        }
         let idx = self.next as usize;
         self.next += 1;
-        let rbs = self.qvd.header.record_byte_size as usize;
-        let rows_off = self.qvd.header.row_block_offset as usize;
-        let rec = &self.qvd.body[rows_off + idx * rbs..rows_off + (idx + 1) * rbs];
-        // Treat the record as a little-endian unsigned integer up to 128 bits.
-        // For widths larger than 128 bits we fall back to u128 chunks.
+        let rec = self.qvd.record(idx);
         let rec_int = le_bits_to_u128(rec);
         let mut out: Vec<Cell> = Vec::with_capacity(self.qvd.header.fields.len());
         for (i, f) in self.qvd.header.fields.iter().enumerate() {
-            if !self.qvd.decoded[i] {
-                // Projected out: no symbol table to resolve against.
-                out.push(None);
-                continue;
-            }
-            let stored = if f.bit_width == 0 {
-                0
-            } else if rbs * 8 <= 128 {
-                let mask = if f.bit_width == 128 {
-                    u128::MAX
-                } else {
-                    (1u128 << f.bit_width) - 1
-                };
-                ((rec_int >> f.bit_offset) & mask) as i128
-            } else {
-                extract_bits_wide(rec, f.bit_offset, f.bit_width) as i128
-            };
-            let index = stored + f.bias as i128;
-            if index < 0 {
-                out.push(None);
-            } else {
-                let ui = index as usize;
-                match self.qvd.symbol_tables[i].get(ui) {
-                    Some(v) => out.push(Some(v.clone())),
-                    None => {
-                        return Some(Err(QvdError::SymbolIndexOutOfRange {
-                            row: idx as u64,
-                            field: f.name.clone(),
-                            index: ui as u64,
-                            symbols: self.qvd.symbol_tables[i].len(),
-                        }));
-                    }
-                }
+            match self.qvd.resolve(idx, i, f, rec, rec_int) {
+                Ok(None) => out.push(None),
+                Ok(Some(sym)) => out.push(Some(self.qvd.symbol_tables[i][sym].clone())),
+                Err(e) => return Some(Err(e)),
             }
         }
         Some(Ok(out))
     }
 }
+
+impl Qvd {
+    /// Bytes of record `idx` inside the row block.
+    fn record(&self, idx: usize) -> &[u8] {
+        let rbs = self.header.record_byte_size as usize;
+        let rows_off = self.header.row_block_offset as usize;
+        &self.body[rows_off + idx * rbs..rows_off + (idx + 1) * rbs]
+    }
+
+    /// Resolve field `i` of record `idx` to a symbol index, `None` for NULL.
+    fn resolve(
+        &self,
+        idx: usize,
+        i: usize,
+        f: &FieldHeader,
+        rec: &[u8],
+        rec_int: u128,
+    ) -> Result<Option<usize>, QvdError> {
+        let rbs = rec.len();
+        let stored = if f.bit_width == 0 {
+            0
+        } else if rbs * 8 <= 128 {
+            let mask = if f.bit_width == 128 {
+                u128::MAX
+            } else {
+                (1u128 << f.bit_width) - 1
+            };
+            ((rec_int >> f.bit_offset) & mask) as i128
+        } else {
+            extract_bits_wide(rec, f.bit_offset, f.bit_width) as i128
+        };
+        let index = stored + f.bias as i128;
+        if index < 0 {
+            return Ok(None);
+        }
+        let ui = index as usize;
+        if ui >= self.symbol_tables[i].len() {
+            return Err(QvdError::SymbolIndexOutOfRange {
+                row: idx as u64,
+                field: f.name.clone(),
+                index: ui as u64,
+                symbols: self.symbol_tables[i].len(),
+            });
+        }
+        Ok(Some(ui))
+    }
+
+    /// Symbol index of every row for field `field`, with [`NULL_INDEX`]
+    /// marking NULL. Errors if the field was not decoded or a row points
+    /// outside the symbol table.
+    pub(crate) fn column_indices(&self, field: usize) -> Result<Vec<u32>, QvdError> {
+        let f = &self.header.fields[field];
+        if !self.decoded[field] {
+            return Err(QvdError::FieldNotDecoded {
+                field: f.name.clone(),
+            });
+        }
+        let n = self.header.no_of_records as usize;
+        let mut out: Vec<u32> = Vec::with_capacity(n.min(MAX_PREALLOC_ROWS));
+        for idx in 0..n {
+            let rec = self.record(idx);
+            let rec_int = le_bits_to_u128(rec);
+            out.push(match self.resolve(idx, field, f, rec, rec_int)? {
+                None => NULL_INDEX,
+                Some(sym) => u32::try_from(sym).map_err(|_| QvdError::LayoutOverflow {
+                    what: "symbol index",
+                })?,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// Marks a NULL in the index vectors built by `Qvd::column_indices`.
+pub(crate) const NULL_INDEX: u32 = u32::MAX;
 
 fn le_bits_to_u128(bytes: &[u8]) -> u128 {
     let mut v: u128 = 0;

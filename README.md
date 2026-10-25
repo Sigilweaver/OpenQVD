@@ -29,7 +29,7 @@ Seven stages complete:
    decoder.
 5. Rust reader prototype (`crates/openqvd`) with edge-case tests.
 6. Writer + semantic round-trip tests.
-7. Python bindings (`crates/openqvd-py`) - PyArrow, Polars, Pandas.
+7. Python bindings (`crates/openqvd-py`) - Arrow PyCapsule interface, PyArrow, Polars, Pandas.
 
 See `SPEC.md` for the current specification and `NOTES.md` for the
 working log of observations.
@@ -39,10 +39,11 @@ working log of observations.
 ```toml
 # Cargo.toml
 [dependencies]
-openqvd = "1"
+openqvd = "2"
 
-# Enable Arrow integration (PyArrow, RecordBatch, type inference):
-openqvd = { version = "1", features = ["arrow"] }
+# Arrow RecordBatch conversion lives in a separate crate with one feature per
+# Arrow major (arrow-59, arrow-60, ...):
+openqvd-arrow = { version = "2", features = ["arrow-60"] }
 ```
 
 ```rust
@@ -99,8 +100,13 @@ maturin develop
 ```python
 import openqvd
 
-# Read as a PyArrow Table
+# Read. The result is an openqvd.Table: it implements the Arrow PyCapsule
+# interface (__arrow_c_stream__), so pyarrow, Polars, DuckDB and others accept
+# it directly. No Arrow library is needed unless you call a to_* helper.
 table = openqvd.read("data.qvd")
+arrow_table = table.to_pyarrow()
+polars_df = table.to_polars()
+print(table.num_rows, table.column_names, table.warnings)
 table = openqvd.read("data.qvd", columns=["OrderId", "Amount"])
 
 # Predicate pushdown (filtering at the Rust level, before Arrow conversion)
@@ -115,7 +121,7 @@ info = openqvd.schema("data.qvd")
 print(info.table_name, info.num_rows)
 print([f.name for f in info.fields])
 
-# Write from a PyArrow Table
+# Write anything that exports Arrow data (pyarrow, Polars, openqvd.Table, ...)
 openqvd.write(table, "out.qvd")
 openqvd.write(table, "out.qvd", table_name="Orders")
 
@@ -128,7 +134,7 @@ lf = pl.scan_qvd("data.qvd", columns=["A", "B"])
 df = pl.read_qvd("data.qvd", filters=[{"column": "A", "op": "eq", "value": "x"}])
 df.qvd.write("out.qvd")
 
-# Pandas (via PyArrow)
+# Pandas (needs pyarrow too)
 df = openqvd.read("data.qvd").to_pandas()
 ```
 

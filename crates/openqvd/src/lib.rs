@@ -31,7 +31,9 @@
 #![warn(missing_docs)]
 #![cfg_attr(not(test), warn(clippy::unwrap_used, clippy::expect_used))]
 
+mod column;
 mod error;
+mod filter;
 mod header;
 mod options;
 mod reader;
@@ -42,16 +44,12 @@ mod writer;
 
 pub(crate) mod bytes;
 
-#[cfg(feature = "arrow")]
-mod arrow;
-
+pub use column::{ColumnData, ColumnType, ColumnValues};
 pub use error::{ErrorKind, QvdError};
+pub use filter::{ColumnFilter, Filter};
 pub use header::{FieldHeader, NumberFormat, TableHeader};
 pub use options::{Leniency, LenientCheck, ReadOptions, UnknownCheck, WriteOptions};
 pub use reader::Qvd;
 pub use value::{Cell, Dual, Value};
 pub use warning::{Warning, WarningKind};
 pub use writer::{Column, WriteTable};
-
-#[cfg(feature = "arrow")]
-pub use self::arrow::{record_batch_to_write_table, ColumnFilter, Filter};

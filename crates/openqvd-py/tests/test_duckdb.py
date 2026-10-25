@@ -93,7 +93,7 @@ class TestFromQuery:
             qdb.from_query('SELECT "Sales Rep Name" FROM reps', out, con=con)
             result = openqvd.read(out)
             assert result.num_columns == 1
-            assert result.schema.names == ["Sales Rep Name"]
+            assert result.column_names == ["Sales Rep Name"]
         finally:
             os.unlink(out)
 
@@ -140,6 +140,19 @@ class TestFromQuery:
             qdb.from_query("SELECT * FROM reps", out, con=con)
             roundtripped = openqvd.read(out)
             assert roundtripped.num_rows == original.num_rows
-            assert roundtripped.schema.names == original.schema.names
+            assert roundtripped.column_names == original.column_names
         finally:
             os.unlink(out)
+
+
+def test_to_relation_without_connection_outlives_the_call(tmp_path):
+    """Generated file, so it runs in CI without the corpus. The relation must
+    stay usable after to_relation returns (it failed on DuckDB 1.2)."""
+    import pyarrow as pa
+
+    p = tmp_path / "d.qvd"
+    openqvd.write(pa.table({"x": [1, 2, 3]}), p)
+    rel = qdb.to_relation(p)
+    assert len(rel.fetchall()) == 3
+    with pytest.raises(ValueError, match="view_name needs a connection"):
+        qdb.to_relation(p, view_name="v")

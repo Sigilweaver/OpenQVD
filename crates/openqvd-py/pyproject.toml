@@ -15,22 +15,23 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "License :: OSI Approved :: Apache Software License",
 ]
 keywords = ["qvd", "qlik", "qlikview", "qliksense", "arrow", "polars", "pandas"]
-dependencies = ["pyarrow>=25.0.1"]
+dependencies = []
 
 [project.optional-dependencies]
-polars = ["polars>=1.43.2"]
-pandas = ["pandas>=2.3.3", "pyarrow>=25.0.1"]
-duckdb = ["duckdb>=1.5.6", "pyarrow>=25.0.1"]
-all = ["openqvd[polars,pandas,duckdb]"]
+pyarrow = ["pyarrow>=15"]
+polars = ["polars>=1.10"]
+pandas = ["pandas>=2.2", "pyarrow>=15"]
+duckdb = ["duckdb>=1.2", "pyarrow>=15"]
+all = ["openqvd[pyarrow,polars,pandas,duckdb]"]
 
 [project.urls]
 Homepage = "https://sigilweaver.app/openqvd"

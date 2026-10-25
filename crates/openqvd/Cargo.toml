@@ -15,17 +15,10 @@ categories.workspace = true
 [lints]
 workspace = true
 
-[features]
-default = []
-arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-cast"]
 
 [dependencies]
 quick-xml = { version = "0.42", features = ["serialize"] }
 thiserror = "2"
-# Optional Arrow integration
-arrow-array = { version = "59", optional = true }
-arrow-schema = { version = "59", optional = true }
-arrow-cast = { version = "59", optional = true }
 
 [[bin]]
 name = "openqvd"
