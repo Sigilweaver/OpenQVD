@@ -4,6 +4,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # openqvd-arrow names its Arrow dependencies by major (arrow-array-60 is
+    # package arrow-array 60). A major bump there would silently turn the
+    # `arrow-60` feature into Arrow 61; a new major is added by hand as a new
+    # `arrow-NN` feature instead. Minor and patch updates still flow in.
+    ignore:
+      - dependency-name: "arrow-*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      arrow:
+        patterns: ["arrow-*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "pip"
     directory: "/crates/openqvd-py"

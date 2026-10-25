@@ -44,8 +44,9 @@ def to_relation(
     path:
         Path to the ``.qvd`` file.
     con:
-        An existing :class:`duckdb.DuckDBPyConnection`. When ``None``, a new
-        in-memory connection is created and returned as part of the relation.
+        An existing :class:`duckdb.DuckDBPyConnection`. When ``None``, the
+        relation lives on DuckDB's default connection (and ``view_name`` is
+        not allowed).
     view_name:
         When provided, the data is also registered as a view on the connection
         under this name so it can be queried by SQL.
@@ -67,10 +68,15 @@ def to_relation(
 
     import openqvd
 
-    if con is None:
-        con = duckdb.connect()
-
     table = openqvd.read(str(path), leniency=leniency).to_pyarrow()
+    if con is None:
+        if view_name is not None:
+            raise ValueError("view_name needs a connection: pass con=")
+        # DuckDB's default connection outlives the relation. A connection
+        # created here would be closed when this function returns, and the
+        # relation would fail with "Connection has already been closed" on
+        # DuckDB 1.2.
+        return duckdb.from_arrow(table)
     if view_name is not None:
         con.register(view_name, table)
         return con.table(view_name)

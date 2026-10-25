@@ -192,9 +192,12 @@ impl Qvd {
     }
 
     /// Iterate rows. Each row is a `Vec<Cell>` with one entry per field in
-    /// the same order as [`Self::fields`]. `None` denotes a NULL. Fields
-    /// left out of `ReadOptions::columns` were not decoded and also read as
-    /// `None`; do not read them.
+    /// the same order as [`Self::fields`]. `None` denotes a NULL.
+    ///
+    /// If any field was left out of `ReadOptions::columns` its symbol table
+    /// was never decoded, so the first item is
+    /// `Err(QvdError::FieldNotDecoded)` and the iterator ends. Use
+    /// [`Self::column`] for projected reads.
     ///
     /// A row that refers to a symbol that does not exist yields
     /// `Err(QvdError::SymbolIndexOutOfRange { .. })`; corruption is never
@@ -311,6 +314,11 @@ impl Qvd {
     /// field, in the same order. Useful for round-trip testing and
     /// programmatic rewriting.
     pub fn to_write_table(&self) -> Result<crate::WriteTable, QvdError> {
+        if let Some(i) = self.decoded.iter().position(|d| !d) {
+            return Err(QvdError::FieldNotDecoded {
+                field: self.header.fields[i].name.clone(),
+            });
+        }
         let n_rows = self.num_rows() as usize;
         // `no_of_records` is bounded by the actual row block size in
         // `from_bytes_impl` whenever `record_byte_size > 0` (row_block_length
@@ -356,17 +364,24 @@ impl Iterator for Rows<'_> {
         if self.next >= self.qvd.header.no_of_records {
             return None;
         }
+        if self.next == 0 {
+            // A column outside `ReadOptions::columns` has no symbol table.
+            // Reading it as NULL would be indistinguishable from real NULLs
+            // (and `to_write_table` would launder it into a valid file), so
+            // the first row reports it and the iterator ends.
+            if let Some(i) = self.qvd.decoded.iter().position(|d| !d) {
+                self.next = self.qvd.header.no_of_records;
+                return Some(Err(QvdError::FieldNotDecoded {
+                    field: self.qvd.header.fields[i].name.clone(),
+                }));
+            }
+        }
         let idx = self.next as usize;
         self.next += 1;
         let rec = self.qvd.record(idx);
         let rec_int = le_bits_to_u128(rec);
         let mut out: Vec<Cell> = Vec::with_capacity(self.qvd.header.fields.len());
         for (i, f) in self.qvd.header.fields.iter().enumerate() {
-            if !self.qvd.decoded[i] {
-                // Projected out: no symbol table to resolve against.
-                out.push(None);
-                continue;
-            }
             match self.qvd.resolve(idx, i, f, rec, rec_int) {
                 Ok(None) => out.push(None),
                 Ok(Some(sym)) => out.push(Some(self.qvd.symbol_tables[i][sym].clone())),

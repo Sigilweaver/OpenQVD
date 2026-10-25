@@ -81,8 +81,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Filtering a table that has an all-NULL column no longer fails with an Arrow
   length error.
 - Reading a column that was left out of `ReadOptions::columns` is an error
-  (`FieldNotDecoded`) instead of an all-NULL column (S2-6, Arrow and column
-  paths; `Qvd::rows()` still yields `None` for such fields).
+  (`FieldNotDecoded`) instead of an all-NULL column. This covers `column()`,
+  the Arrow adapters, filters, `Qvd::rows()` (first item is the error) and
+  `to_write_table()` (S2-6).
+- `read(columns=[])` returns a table with no columns and the right row count
+  instead of an Arrow error.
+- `openqvd.duckdb.to_relation(path)` without a connection returned a relation
+  on a closed connection (DuckDB 1.2); it now uses DuckDB's default connection.
+  `view_name` without `con` is a `ValueError`.
 
 ### Behavior changes
 
@@ -94,6 +100,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   corruption is no longer invisible to corpus runs.
 
 ### Changed
+
+- `rust-version` is 1.88, the highest minimum among the dependencies (Arrow 60).
+  CI runs clippy on all targets and a job that installs the declared Python
+  minimums (pyarrow 15, polars 1.10, pandas 2.2, duckdb 1.2). Dependabot no
+  longer proposes Arrow major bumps for the version-named features.
 
 - Python tests read the corpus location from `OPENQVD_CORPUS_DIR` instead of
   a fixed path, and fail instead of skipping when `REQUIRE_CORPUS=1` and a

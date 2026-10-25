@@ -130,3 +130,13 @@ def test_read_with_filters_and_columns(qvd_path):
     )
     assert t.column_names == ["s"]
     assert t.to_pyarrow().column("s").to_pylist() == ["a", "b"]
+
+
+def test_empty_column_list_gives_a_table_with_rows_and_no_columns(qvd_path):
+    t = openqvd.read(qvd_path, columns=[])
+    assert t.column_names == []
+    assert t.num_rows == 3 and t.num_columns == 0
+    filtered = openqvd.read(
+        qvd_path, columns=[], filters=[{"column": "i", "op": "is_not_null"}]
+    )
+    assert filtered.num_rows == 2

@@ -62,7 +62,17 @@ pub fn to_record_batch(qvd: &Qvd, options: &BatchOptions) -> Result<RecordBatch,
         ));
         arrays.push(array);
     }
-    RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays).map_err(arrow_err)
+    // A batch with no columns still has rows (`columns=[]` is a legal request).
+    let row_count = match &rows {
+        Some(r) => r.len(),
+        None => qvd.num_rows() as usize,
+    };
+    RecordBatch::try_new_with_options(
+        Arc::new(Schema::new(fields)),
+        arrays,
+        &arrow_array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+    )
+    .map_err(arrow_err)
 }
 
 fn column_to_array(col: &ColumnData) -> Result<ArrayRef, QvdError> {

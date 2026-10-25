@@ -134,3 +134,26 @@ fn column_select_keeps_chosen_rows() {
     assert_eq!(c.len(), 2);
     assert_eq!(c.iter().collect::<Vec<_>>(), vec![Some(0), Some(2)]);
 }
+
+#[test]
+fn rows_and_to_write_table_refuse_undecoded_columns() {
+    let q = qvd(
+        vec![
+            Column::new("a", vec![Some(Value::Int(1)), Some(Value::Int(2))]),
+            Column::new("b", vec![s("x"), s("y")]),
+        ],
+        &ReadOptions::new().with_columns(["a"]),
+    );
+    let mut rows = q.rows();
+    match rows.next() {
+        Some(Err(QvdError::FieldNotDecoded { field })) => assert_eq!(field, "b"),
+        other => panic!("expected FieldNotDecoded, got {other:?}"),
+    }
+    assert!(rows.next().is_none());
+    assert!(matches!(
+        q.to_write_table(),
+        Err(QvdError::FieldNotDecoded { .. })
+    ));
+    // The decoded column is still readable.
+    assert_eq!(q.column(0).unwrap().len(), 2);
+}
