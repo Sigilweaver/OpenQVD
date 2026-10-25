@@ -1,8 +1,9 @@
 use crate::error::QvdError;
 
 /// Parsed `<NumberFormat>` element. Every observed file contains the
-/// same six sub-elements. Values are informational only: they do not
-/// change how bytes are decoded.
+/// same six sub-elements. They do not change how bytes are decoded, but
+/// `Type` selects how a column's values are converted (DATE, TIMESTAMP and
+/// TIME columns become date/time types), so it is required exactly once.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct NumberFormat {
@@ -84,7 +85,7 @@ pub struct FieldHeader {
     pub offset: u32,
     /// `Length`: byte length of the symbol table.
     pub length: u32,
-    /// `NumberFormat` sub-element (informational).
+    /// `NumberFormat` sub-element.
     pub number_format: NumberFormat,
     /// `Tags/String` children. Usually Qlik markers such as
     /// `$numeric`, `$text`, `$key`.
@@ -126,12 +127,22 @@ pub(crate) fn parse(full: &[u8]) -> Result<(TableHeader, usize), QvdError> {
     const END_CRLF: &[u8] = b"</QvdTableHeader>\r\n\x00";
     const END_LF: &[u8] = b"</QvdTableHeader>\n\x00";
 
-    let (end_idx, term_len) = if let Some(p) = find_subslice(full, END_CRLF) {
-        (p, END_CRLF.len())
-    } else if let Some(p) = find_subslice(full, END_LF) {
-        (p, END_LF.len())
-    } else {
-        return Err(QvdError::HeaderNotFound);
+    // The header ends at the earliest terminator of either style. Searching
+    // for one style over the whole file first could pick a match inside the
+    // body.
+    let crlf = find_subslice(full, END_CRLF).map(|p| (p, END_CRLF.len()));
+    let lf = find_subslice(full, END_LF).map(|p| (p, END_LF.len()));
+    let (end_idx, term_len) = match (crlf, lf) {
+        (Some(a), Some(b)) => {
+            if a.0 <= b.0 {
+                a
+            } else {
+                b
+            }
+        }
+        (Some(a), None) => a,
+        (None, Some(b)) => b,
+        (None, None) => return Err(QvdError::HeaderNotFound),
     };
 
     let xml_end = end_idx + b"</QvdTableHeader>".len();
@@ -149,155 +160,273 @@ fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     (0..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
 }
 
+/// Store `value` in `slot`, rejecting a second occurrence.
+fn set_once<T>(
+    slot: &mut Option<T>,
+    value: T,
+    element: &str,
+    field: Option<&str>,
+) -> Result<(), QvdError> {
+    if slot.is_some() {
+        return Err(QvdError::DuplicateElement {
+            element: element.to_owned(),
+            field: field.map(str::to_owned),
+        });
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn require<T>(slot: Option<T>, element: &str, field: Option<&str>) -> Result<T, QvdError> {
+    slot.ok_or_else(|| QvdError::MissingElement {
+        element: element.to_owned(),
+        field: field.map(str::to_owned),
+    })
+}
+
+/// A `<QvdFieldHeader>` being assembled; every element must appear once.
+#[derive(Default)]
+struct FieldBuilder {
+    name: Option<String>,
+    bit_offset: Option<u32>,
+    bit_width: Option<u32>,
+    bias: Option<i32>,
+    no_of_symbols: Option<u32>,
+    offset: Option<u32>,
+    length: Option<u32>,
+    number_format: NumberFormat,
+    number_type: Option<()>,
+    tags: Vec<String>,
+}
+
+impl FieldBuilder {
+    fn build(self) -> Result<FieldHeader, QvdError> {
+        let name = require(self.name, "FieldName", None)?;
+        let f = Some(name.as_str());
+        require(self.number_type, "Type", f)?;
+        Ok(FieldHeader {
+            bit_offset: require(self.bit_offset, "BitOffset", f)?,
+            bit_width: require(self.bit_width, "BitWidth", f)?,
+            bias: require(self.bias, "Bias", f)?,
+            no_of_symbols: require(self.no_of_symbols, "NoOfSymbols", f)?,
+            offset: require(self.offset, "Offset", f)?,
+            length: require(self.length, "Length", f)?,
+            number_format: self.number_format,
+            tags: self.tags,
+            name,
+        })
+    }
+}
+
 fn parse_xml(xml: &str) -> Result<TableHeader, QvdError> {
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
     let mut r = Reader::from_str(xml);
-    r.config_mut().trim_text(true);
+    // Text is kept exactly as written: names and separators may carry
+    // significant spaces (`<Thou> </Thou>`). Numeric elements are trimmed
+    // when parsed.
 
     let mut stack: Vec<String> = Vec::new();
     let mut text_buf = String::new();
 
-    let mut table_name = String::new();
+    let mut table_name: Option<String> = None;
     let mut build_no: Option<String> = None;
-    let mut record_byte_size: u32 = 0;
-    let mut no_of_records: u32 = 0;
-    let mut row_block_offset: u32 = 0;
-    let mut row_block_length: u32 = 0;
+    let mut compression: Option<String> = None;
+    let mut record_byte_size: Option<u32> = None;
+    let mut no_of_records: Option<u32> = None;
+    let mut row_block_offset: Option<u32> = None;
+    let mut row_block_length: Option<u32> = None;
     let mut fields: Vec<FieldHeader> = Vec::new();
-    let mut current: Option<FieldHeader> = None;
-    let mut in_number_format = false;
-    let mut in_tags = false;
+    let mut current: Option<FieldBuilder> = None;
+    let mut seen_root = false;
+
+    // `Start`, `Empty` and `End` share one handler pair so that a
+    // self-closing element is exactly an element with empty text.
+    macro_rules! open_element {
+        ($name:expr) => {{
+            let name: String = $name;
+            if !seen_root {
+                if name != "QvdTableHeader" {
+                    return Err(QvdError::UnexpectedRoot { found: name });
+                }
+                seen_root = true;
+            }
+            if name == "QvdFieldHeader" {
+                current = Some(FieldBuilder::default());
+            }
+            stack.push(name);
+            text_buf.clear();
+        }};
+    }
+    macro_rules! close_element {
+        () => {{
+            let name = stack.pop().unwrap_or_default();
+            let parent = stack.last().cloned().unwrap_or_default();
+            let txt = std::mem::take(&mut text_buf);
+            match (parent.as_str(), name.as_str()) {
+                ("QvdTableHeader", "TableName") => {
+                    set_once(&mut table_name, txt, "TableName", None)?
+                }
+                ("QvdTableHeader", "QvBuildNo") => set_once(&mut build_no, txt, "QvBuildNo", None)?,
+                ("QvdTableHeader", "Compression") => {
+                    set_once(&mut compression, txt, "Compression", None)?
+                }
+                ("QvdTableHeader", "RecordByteSize") => set_once(
+                    &mut record_byte_size,
+                    parse_u32("RecordByteSize", &txt)?,
+                    "RecordByteSize",
+                    None,
+                )?,
+                ("QvdTableHeader", "NoOfRecords") => set_once(
+                    &mut no_of_records,
+                    parse_u32("NoOfRecords", &txt)?,
+                    "NoOfRecords",
+                    None,
+                )?,
+                ("QvdTableHeader", "Offset") => set_once(
+                    &mut row_block_offset,
+                    parse_u32("Offset", &txt)?,
+                    "Offset",
+                    None,
+                )?,
+                ("QvdTableHeader", "Length") => set_once(
+                    &mut row_block_length,
+                    parse_u32("Length", &txt)?,
+                    "Length",
+                    None,
+                )?,
+                ("QvdFieldHeader", element) => {
+                    if let Some(f) = current.as_mut() {
+                        let fname = f.name.clone();
+                        let fname = fname.as_deref();
+                        match element {
+                            "FieldName" => set_once(&mut f.name, txt, "FieldName", None)?,
+                            "BitOffset" => set_once(
+                                &mut f.bit_offset,
+                                parse_u32("BitOffset", &txt)?,
+                                "BitOffset",
+                                fname,
+                            )?,
+                            "BitWidth" => set_once(
+                                &mut f.bit_width,
+                                parse_u32("BitWidth", &txt)?,
+                                "BitWidth",
+                                fname,
+                            )?,
+                            "Bias" => {
+                                set_once(&mut f.bias, parse_i32("Bias", &txt)?, "Bias", fname)?
+                            }
+                            "NoOfSymbols" => set_once(
+                                &mut f.no_of_symbols,
+                                parse_u32("NoOfSymbols", &txt)?,
+                                "NoOfSymbols",
+                                fname,
+                            )?,
+                            "Offset" => set_once(
+                                &mut f.offset,
+                                parse_u32("Offset", &txt)?,
+                                "Offset",
+                                fname,
+                            )?,
+                            "Length" => set_once(
+                                &mut f.length,
+                                parse_u32("Length", &txt)?,
+                                "Length",
+                                fname,
+                            )?,
+                            // NumberFormat, Tags and any element this crate
+                            // does not interpret (for example Comment).
+                            _ => {}
+                        }
+                    }
+                }
+                ("NumberFormat", sub) => {
+                    if let Some(f) = current.as_mut() {
+                        match sub {
+                            "Type" => {
+                                let fname = f.name.clone();
+                                set_once(&mut f.number_type, (), "Type", fname.as_deref())?;
+                                f.number_format.r#type = txt
+                            }
+                            "nDec" => f.number_format.n_dec = txt,
+                            "UseThou" => f.number_format.use_thou = txt,
+                            "Fmt" => f.number_format.fmt = txt,
+                            "Dec" => f.number_format.dec = txt,
+                            "Thou" => f.number_format.thou = txt,
+                            _ => {}
+                        }
+                    }
+                }
+                ("Tags", "String") => {
+                    if let Some(f) = current.as_mut() {
+                        if !txt.is_empty() {
+                            f.tags.push(txt);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if name == "QvdFieldHeader" {
+                if let Some(f) = current.take() {
+                    fields.push(f.build()?);
+                }
+            }
+        }};
+    }
 
     loop {
         match r.read_event().map_err(QvdError::xml)? {
             Event::Start(e) => {
-                let name = e.name().as_ref().to_owned();
-                if name == "QvdFieldHeader" {
-                    current = Some(FieldHeader {
-                        name: String::new(),
-                        bit_offset: 0,
-                        bit_width: 0,
-                        bias: 0,
-                        no_of_symbols: 0,
-                        offset: 0,
-                        length: 0,
-                        number_format: NumberFormat::default(),
-                        tags: Vec::new(),
-                    });
-                } else if name == "NumberFormat" {
-                    in_number_format = true;
-                } else if name == "Tags" {
-                    in_tags = true;
-                }
-                stack.push(name);
-                text_buf.clear();
+                open_element!(e.name().as_ref().to_owned());
             }
-            Event::End(e) => {
-                let name = e.name().as_ref().to_owned();
-                // Parent context is the element *above* this one, i.e. the
-                // second-to-last entry on the stack.
-                let parent = stack
-                    .get(stack.len().saturating_sub(2))
-                    .cloned()
-                    .unwrap_or_default();
-                let txt = std::mem::take(&mut text_buf);
-
-                match (parent.as_str(), name.as_str()) {
-                    ("QvdTableHeader", "TableName") => table_name = txt,
-                    ("QvdTableHeader", "QvBuildNo") => {
-                        build_no = Some(txt).filter(|s| !s.is_empty())
-                    }
-                    ("QvdTableHeader", "RecordByteSize") => {
-                        record_byte_size = parse_u32("RecordByteSize", &txt)?
-                    }
-                    ("QvdTableHeader", "NoOfRecords") => {
-                        no_of_records = parse_u32("NoOfRecords", &txt)?
-                    }
-                    ("QvdTableHeader", "Offset") => row_block_offset = parse_u32("Offset", &txt)?,
-                    ("QvdTableHeader", "Length") => row_block_length = parse_u32("Length", &txt)?,
-                    ("QvdFieldHeader", field) => {
-                        if let Some(f) = current.as_mut() {
-                            match field {
-                                "FieldName" => f.name = txt,
-                                "BitOffset" => f.bit_offset = parse_u32("BitOffset", &txt)?,
-                                "BitWidth" => f.bit_width = parse_u32("BitWidth", &txt)?,
-                                "Bias" => f.bias = parse_i32("Bias", &txt)?,
-                                "NoOfSymbols" => f.no_of_symbols = parse_u32("NoOfSymbols", &txt)?,
-                                "Offset" => f.offset = parse_u32("Offset", &txt)?,
-                                "Length" => f.length = parse_u32("Length", &txt)?,
-                                _ => {}
-                            }
-                        }
-                    }
-                    ("NumberFormat", sub) => {
-                        if let Some(f) = current.as_mut() {
-                            match sub {
-                                "Type" => f.number_format.r#type = txt,
-                                "nDec" => f.number_format.n_dec = txt,
-                                "UseThou" => f.number_format.use_thou = txt,
-                                "Fmt" => f.number_format.fmt = txt,
-                                "Dec" => f.number_format.dec = txt,
-                                "Thou" => f.number_format.thou = txt,
-                                _ => {}
-                            }
-                        }
-                    }
-                    ("Tags", "String") => {
-                        if let Some(f) = current.as_mut() {
-                            if !txt.is_empty() {
-                                f.tags.push(txt);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                if name == "NumberFormat" {
-                    in_number_format = false;
-                }
-                if name == "Tags" {
-                    in_tags = false;
-                }
-                if name == "QvdFieldHeader" {
-                    if let Some(f) = current.take() {
-                        fields.push(f);
-                    }
-                }
-                stack.pop();
-            }
-            Event::Text(t) => {
-                // quick-xml 0.42 reads from `&str`, so the text is already
-                // UTF-8 and only entity unescaping can fail.
-                let s = quick_xml::escape::unescape(&t)
-                    .map_err(QvdError::xml)?
-                    .into_owned();
-                text_buf.push_str(&s);
-            }
+            Event::End(_) => close_element!(),
             Event::Empty(e) => {
-                // Self-closing elements carry no text. We still need to
-                // record zero-valued fields, which the logic above handles
-                // via Start/End.
-                let _ = e;
+                open_element!(e.name().as_ref().to_owned());
+                close_element!();
+            }
+            Event::Text(t) => text_buf.push_str(&t),
+            Event::CData(c) => text_buf.push_str(&c),
+            Event::GeneralRef(rf) => {
+                // `&amp;`, `&lt;`, `&gt;`, `&apos;`, `&quot;` and numeric
+                // character references. Anything else is a DTD-defined
+                // entity, which a QVD header has no business using.
+                if let Some(ch) = rf.resolve_char_ref().map_err(QvdError::xml)? {
+                    text_buf.push(ch);
+                } else if let Some(txt) = quick_xml::escape::resolve_predefined_entity(&rf) {
+                    text_buf.push_str(txt);
+                } else {
+                    return Err(QvdError::UnknownEntity {
+                        entity: rf.to_string(),
+                    });
+                }
             }
             Event::Eof => break,
-            _ => {}
+            // Carry no header data.
+            Event::Decl(_) | Event::PI(_) | Event::Comment(_) | Event::DocType(_) => {}
         }
     }
-    let _ = in_number_format;
-    let _ = in_tags;
 
+    if !seen_root {
+        return Err(QvdError::HeaderEmpty);
+    }
+    if let Some(c) = &compression {
+        if !c.trim().is_empty() {
+            return Err(QvdError::UnsupportedCompression { value: c.clone() });
+        }
+    }
+    let table_name = require(table_name, "TableName", None)?;
     if table_name.is_empty() && fields.is_empty() {
         return Err(QvdError::HeaderEmpty);
     }
     Ok(TableHeader {
         table_name,
-        build_no,
+        build_no: build_no.filter(|s| !s.is_empty()),
         fields,
-        record_byte_size,
-        no_of_records,
-        row_block_offset,
-        row_block_length,
+        record_byte_size: require(record_byte_size, "RecordByteSize", None)?,
+        no_of_records: require(no_of_records, "NoOfRecords", None)?,
+        row_block_offset: require(row_block_offset, "Offset", None)?,
+        row_block_length: require(row_block_length, "Length", None)?,
     })
 }
 

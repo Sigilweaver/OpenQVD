@@ -74,6 +74,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- XML entity references and CDATA in the header were silently deleted:
+  `P&amp;L` read as `PL` and `Customer&apos;s` as `Customers`. Predefined
+  entities, numeric character references and CDATA are resolved; any other
+  entity is an error. Text is no longer trimmed, so `<Thou> </Thou>` keeps its
+  space (S1-2).
+- A missing, self-closing or duplicated numeric header element (per-field
+  `BitOffset`, `BitWidth`, `Bias`, `NoOfSymbols`, `Offset`, `Length`; root
+  `RecordByteSize`, `NoOfRecords`, `Offset`, `Length`) used to default to 0.
+  That decoded every row as symbol 0, or opened a file with 0 rows. Each is now
+  an error (S1-7).
+- `<Compression>` is read; a non-empty value is `UnsupportedCompression`
+  instead of being decoded as if uncompressed (S1-8).
+- A body containing a CRLF-style header terminator could split an LF-terminated
+  header at the wrong place. The earliest terminator wins, and the root
+  element must be `QvdTableHeader` (S3-3).
+- `NumberFormat/Type` selects the date/time conversion but a missing or
+  duplicated `<Type>` was accepted (the column read as plain numbers). It is
+  required exactly once per field.
+- `Qvd::to_bytes` and `openqvd rewrite`: `to_bytes` returns the original header
+  bytes followed by the body, so build number, creator, lineage, per-field
+  comments and unknown elements survive (S2-5). `openqvd rewrite` and the
+  `round_trip` example now re-encode through the writer, as documented.
 - `write` wrote only the first batch of a table whose column could not be
   combined into one chunk; every batch is now converted (S2-4).
 - A filter on a column holding NaN no longer drops the NaN rows: rows are
@@ -91,6 +113,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `view_name` without `con` is a `ValueError`.
 
 ### Behavior changes
+
+- Files whose header lacks any numeric element, repeats one, has a non-empty
+  `<Compression>`, or uses an undefined XML entity no longer open. None of the
+  1,044 readable corpus files does.
+- Field and table names containing `&`, `<`, `>`, `'` or `"` (stored as
+  entities) now read with those characters; before they read with the
+  characters removed. 18 corpus files carry such entities.
+- `<Thou> </Thou>` reads as a single space, not empty.
+- The error for a header that is not a QVD document names the unexpected root
+  element.
 
 - Asking for a column that is not in the file now fails when the file is
   opened, for every projection, not only when converting to Arrow.
