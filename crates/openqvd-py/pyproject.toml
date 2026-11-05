@@ -1,6 +1,6 @@
 [build-system]
 # Maturin 1.14+ safely relocates parent-relative README and license paths.
-requires = ["maturin==1.14.1"]
+requires = ["maturin==1.16.0"]
 build-backend = "maturin"
 
 [project]
