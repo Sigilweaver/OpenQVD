@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyCapsuleMethods};
 
 use arrow_array::ffi::{from_ffi, FFI_ArrowArray};
-use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+use arrow_array::ffi_stream::{FFI_ArrowArrayStream, RecordBatchStreamReader};
 use arrow_array::{RecordBatch, RecordBatchIterator, RecordBatchReader, StructArray};
 use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::SchemaRef;
@@ -320,7 +320,7 @@ fn batches_from_py(obj: &Bound<'_, PyAny>) -> PyResult<(SchemaRef, Vec<RecordBat
     if obj.hasattr("__arrow_c_stream__")? {
         let cap = obj.call_method0("__arrow_c_stream__")?;
         let stream = take_capsule(&cap, "arrow_array_stream", FFI_ArrowArrayStream::empty())?;
-        let reader = ArrowArrayStreamReader::try_new(stream).map_err(arrow_err)?;
+        let reader = RecordBatchStreamReader::try_new(stream).map_err(arrow_err)?;
         let schema = reader.schema();
         let batches = reader.collect::<Result<Vec<_>, _>>().map_err(arrow_err)?;
         Ok((schema, batches))

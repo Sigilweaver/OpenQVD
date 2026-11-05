@@ -261,6 +261,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   corpus file is missing.
 - Bumped `quick-xml` to 0.42 and `thiserror` to 2.0.21. QVD header parsing
   behaves as before.
+- Python bindings: bumped PyO3 to 0.30 and the pinned Maturin build backend
+  to 1.16.0. No source changes were needed for PyO3 0.30; the extension still
+  builds one abi3 wheel for CPython 3.10 and later, and the Python API is
+  unchanged.
+- Bumped the locked Arrow 60 crates to 60.1.0. The Python extension now
+  requires `arrow-array` / `arrow-schema` 60.1 and imports Arrow C streams
+  through `RecordBatchStreamReader`, the new name for the deprecated
+  `ArrowArrayStreamReader`. Behaviour is unchanged.
 
 ## [2.0.0] - 2026-10-17
 
