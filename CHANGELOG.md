@@ -269,6 +269,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   requires `arrow-array` / `arrow-schema` 60.1 and imports Arrow C streams
   through `RecordBatchStreamReader`, the new name for the deprecated
   `ArrowArrayStreamReader`. Behaviour is unchanged.
+- `CITATION.cff` identifies the Zenodo concept DOI (10.5281/zenodo.20470598),
+  which resolves to the latest archived version, instead of the DOI of the
+  1.2.0 version record.
 
 ## [2.0.0] - 2026-10-17
 
